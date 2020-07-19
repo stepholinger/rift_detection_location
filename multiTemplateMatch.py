@@ -5,7 +5,78 @@ import numpy as np
 import copy
 import time
 
-def makeTemplates(path,stat,chan,tempLims,freq):
+def readInputTemplates(path,wave_fname,corr_fname,ccThresh):
+    # read in templates from energy detector
+    energy_det_all = obspy.read(path + wave_fname)
+
+    # only need one channel here as multiband, 3-component templates get made in the code
+    energy_det = []
+    for d in energy_det_all:
+        if d.stats.channel == "HHZ":
+            energy_det.append(d)
+
+    # read in cross correlation results
+    cc_output = h5py.File(path + corr_fname,'r')
+    corrCoefs = np.array(list(cc_output['corrCoefs']))
+    sortInd = np.argsort(abs(corrCoefs))[::-1]
+    sortCorrCoefs = corrCoefs[sortInd]
+
+    # filter by cc coefficient
+    energy_det_cc = []
+    for c in range(len(sortCorrCoefs)):
+          if abs(sortCorrCoefs[c]) > ccThresh:
+              energy_det_cc.append(energy_det[sortInd[c]])
+
+    return energy_det_cc
+
+
+def makeTemplates(dataPath,outPath,stat,freqLow,freqHigh,energy_det_cc,numTemp):
+    # make and save templates using time limits from detections above cc coefficient threshold
+    print("Making " + str(len(energy_det_cc)) + " templates...")
+    for d in range(numTemp):
+        tempLims = [energy_det_cc[d].stats.starttime, energy_det_cc[d].stats.endtime]
+        stTempLow = makeSingleTemplates(dataPath,stat,"H*",tempLims,freqLow)
+        stTempHigh = makeSingleTemplates(dataPath,stat,"H*",tempLims,freqHigh)
+        stTempLow.write(outPath + '/shortTemplates_resample/' + 'tempLow_' + str(d) +'.h5','H5',mode='a')
+        stTempHigh.write(outPath + '/shortTemplates_resample/' + 'tempHigh_' + str(d) +'.h5','H5',mode='a')
+
+
+def readData(filename,freqLow,freqHigh,dummyChan):
+    # make filename with wildcard channel
+    fname = filename.replace(dummyChan,"H*")
+
+    # read files and do basic preprocessing
+    stRaw = obspy.read(fname)
+    stRaw.detrend("demean")
+    stRaw.detrend("linear")
+    stRaw.taper(max_percentage=0.01, max_length=10.)
+
+    # copy the file
+    stLow = stRaw.copy()
+    stHigh = stRaw.copy()
+
+    # filter and downsample the data to each band
+    stLow.resample(freqLow[1]*3)
+    stHigh.resample(freqHigh[1]*3)
+    stLow.filter("bandpass",freqmin=freqLow[0],freqmax=freqLow[1])
+    stHigh.filter("bandpass",freqmin=freqHigh[0],freqmax=freqHigh[1])
+
+    return stLow,stHigh
+
+
+def removeRedundant(detections,detID,tolerance):
+    # remove redundant detections
+    finalDetections = []
+    finalDetID = []
+    for d in range(len(detections)-1):
+            if detections[d+1] - detections[d] > tolerance:
+                finalDetections.append(detections[d])
+                finalDetID.append(detID[d])
+
+    return finalDetections,finalDetID
+
+
+def makeSingleTemplate(path,stat,chan,tempLims,freq):
 
     # extract year string
     tempYear = tempLims[0].year
@@ -35,6 +106,7 @@ def makeTemplates(path,stat,chan,tempLims,freq):
     stTemp.detrend("demean")
     stTemp.detrend("linear")
     stTemp.taper(max_percentage=0.01, max_length=10.)
+    stTemp.resample(freq[1]*3)
 
     # filter the data to each band
     stTemp.filter("bandpass",freqmin=freq[0],freqmax=freq[1])
@@ -47,52 +119,53 @@ def makeTemplates(path,stat,chan,tempLims,freq):
 
     return stTemp
 
-def similarity_component_thres(ccs, thres, num_components):
-    ccmatrix = np.array([tr.data for tr in ccs])
-    header = dict(sampling_rate=ccs[0].stats.sampling_rate,
-                  starttime=ccs[0].stats.starttime)
-    comp_thres = np.sum(ccmatrix > thres, axis=0) >= num_components
-    data = np.mean(ccmatrix, axis=0) * comp_thres
-    return obspy.Trace(data=data, header=header)
+def multiTemplateMatch(stTempLow,stLow,threshLow,stTempHigh,stHigh,threshHigh,numComp,tolerance,distance):
 
-def multiTemplateMatch(stTempLow,stLow,threshLow,stTempHigh,stHigh,threshHigh,numComp,tolerance):
-
-    # make a useful list
+    # make a couple useful list
+    detectionsTemp = []
     detections = []
 
-    # define similary functions
-    def simfLow(ccs):
-        return similarity_component_thres(ccs,threshLow,numComp)
+    # iterate through each channel
+    for s in range(len(stTempLow)):
 
-    def simfHigh(ccs):
-        return similarity_component_thres(ccs,threshHigh,numComp)
+        # call the template matching function in each band
+        #detectionsLow,sl = correlation_detector(obspy.Stream(stLow[s]),obspy.Stream(stTempLow[s]),threshLow,tolerance)
+        #detectionsHigh,sh = correlation_detector(obspy.Stream(stHigh[s]),obspy.Stream(stTempHigh[s]),threshHigh,tolerance)
+        detectionsLow,sl = correlation_detector(obspy.Stream(stLow[s]),obspy.Stream(stTempLow[s]),threshLow,distance)
+        detectionsHigh,sh = correlation_detector(obspy.Stream(stHigh[s]),obspy.Stream(stTempHigh[s]),threshHigh,distance)
+        #print(len(detectionsLow))
+        #print(len(detectionsHigh))
 
-    # call the template matching function in each band
-    detectionsLow,sl = correlation_detector(stLow,stTempLow,threshLow,tolerance,similarity_func=simfLow)
-    detectionsHigh,sh = correlation_detector(stHigh,stTempHigh,threshHigh,tolerance,similarity_func=simfHigh)
+        # get all high frequency trigger times for today
+        detHighTimes = []
+        for i in range(len(detectionsHigh)):
+            detHighTimes.append(detectionsHigh[i].get("time"))
 
-    #print(detectionsLow)
-    #print(detectionsHigh)
+        # loop through all low frequency triggers for today
+        for i in range(len(detectionsLow)):
+            detLowTime = detectionsLow[i].get("time")
 
-    # get all high frequency trigger times for today
-    detHighTimes = []
-    for i in range(len(detectionsHigh)):
-        detHighTimes.append(detectionsHigh[i].get("time"))
+            # calculate time difference between low freq trigger and all high freq triggers
+            diffs = np.subtract(detLowTime,detHighTimes)
 
-    # loop through all low frequency triggers for today
-    for i in range(len(detectionsLow)):
-        detLowTime = detectionsLow[i].get("time")
+            # only interested in positive values of 'diffs', which indicates high freq trigger first
+            diffs[diffs < -1*tolerance] = float("nan")
 
-        # calculate time difference between low freq trigger and all high freq triggers
-        diffs = abs(np.subtract(detLowTime,detHighTimes))
-
-        # save low freq trigger if a high freq trigger is sufficiently close
-        if any(diffs) and min(diffs) < tolerance:
-            detections.append(detLowTime)
-            #stLow.plot(starttime=detLowTime,endtime=detLowTime+300)
+            # save low freq trigger if a high freq trigger is sufficiently close
+            if len(diffs) > 0:
+                if min(diffs) < tolerance:
+                    detectionsTemp.append(detLowTime)
 
     # sort detections chronologically
-    detections.sort()
+    detectionsTemp.sort()
+
+    #print(detectionsTemp)
+    # save detections if they show up on desired number of components
+    if len(detectionsTemp) > 0:
+        for d in range(len(detectionsTemp)-numComp-1):
+            #print(detectionsTemp[d+numComp-1] - detectionsTemp[d])
+            if detectionsTemp[d+numComp-1] - detectionsTemp[d] < tolerance:
+                detections.append(detectionsTemp[d])
 
     return detections
 

@@ -70,7 +70,7 @@ def makeTemplate(path,stat,chan,tempLims,freq,filtType):
 
 # set path
 dataPath = "/media/Data/Data/PIG/MSEED/noIR/"
-outPath = '/home/setholinger/Documents/Projects/PIG/detections/templateMatch/multiTemplate/'
+outPath = '/home/setholinger/Documents/Projects/PIG/detections/templateMatch/multiTemplate/run3/'
 
 # read detection file
 csv = 0
@@ -84,8 +84,11 @@ if txt:
 fs = 100
 snipLen = 300
 
+# add buffer in front of waveform
+buffer = 200
+
 # set filter and filter waveforms- prefilt indicates waveforms already filtered
-freq = [0.01,1]
+freq = [0.05,1]
 filtType = "bandpass"
 
 # set desired channel
@@ -95,25 +98,35 @@ chan = 'HHZ'
 # set whether to save snipped waveforms
 save = 1
 read = 0
+stack = 0
 type = 'short'
 if read:
-     waveforms = obspy.read(outPath + type + "_waveforms.h5")
-     waveforms.filter("bandpass",freqmin=freq[0],freqmax=freq[1])
+     waveforms = obspy.read(outPath + type + "_waveforms_" + str(freq[0]) + "-" + str(freq[1]) + "Hz.h5")
+     #waveforms.filter("bandpass",freqmin=freq[0],freqmax=freq[1])
 
 # open file for output
-outFile = h5py.File(outPath + type + "_correlations_" + str(freq[0]) + "-" + str(freq[1]) + "Hz.h5","w")
+#outFile = h5py.File(outPath + type + "_correlations_" + str(freq[0]) + "-" + str(freq[1]) + "Hz.h5","w")
 
 # set and read master event
-masterEventIdx = 3189
+# run 1
+#masterEventIdx = 3189
+# run 2
+#masterEventIdx = 1307
+# run 3
+masterEventIdx = 10679
+
 if read:
     masterEvent = waveforms[masterEventIdx]
 else:
     if csv:
-        tempLims = [det[masterEventIdx].detect_time,det[masterEventIdx].detect_time+snipLen]
+        tempLims = [det[masterEventIdx].detect_time-buffer,det[masterEventIdx].detect_time+snipLen]
     if txt:
-        tempLims = [obspy.UTCDateTime(det[masterEventIdx]),obspy.UTCDateTime(det[masterEventIdx])+snipLen]
+        tempLims = [obspy.UTCDateTime(det[masterEventIdx])-buffer,obspy.UTCDateTime(det[masterEventIdx])+snipLen]
     masterEvent,_ = makeTemplate(dataPath,stat,chan,tempLims,freq,filtType)
 #    masterEvent = masterEvent[0]
+
+if stack:
+    masterEvent = obspy.read(outPath + "stack_" + str(freq[0]) + "-" + str(freq[1]) + "Hz.h5")
 
 # make some arrays for storing output
 shifts = np.zeros((len(det)))
@@ -126,11 +139,16 @@ for i in range(len(det)):
     # get waveform for current detection
     if read:
         event = waveforms[i]
+
+        # correlate master event and waveform i
+        corr = correlate(waveforms[masterEventIdx],event,event.stats.npts,normalize='naive',demean=False,method='auto')
+        shift, corrCoef = xcorr_max(corr)
+
     else:
         if csv:
-            tempLims = [det[i].detect_time,det[i].detect_time+snipLen]
+            tempLims = [det[i].detect_time-buffer,det[i].detect_time+snipLen]
         if txt:
-            tempLims = [obspy.UTCDateTime(det[i]),obspy.UTCDateTime(det[i])+snipLen]
+            tempLims = [obspy.UTCDateTime(det[i])-buffer,obspy.UTCDateTime(det[i])+snipLen]
 
         #read in whole day and preprocess if current detection is not on same day as last one
         if i == 0 or tempLims[0].day != st[0].stats.starttime.day:
@@ -141,15 +159,15 @@ for i in range(len(det)):
             event.trim(starttime=tempLims[0],endtime=tempLims[1])
             #event = event[0]
 
-    # correlate master event and waveform i
-    corr = correlate(masterEvent[0],event[0],event[0].stats.npts,normalize='naive',demean=False,method='auto')
-    shift, corrCoef = xcorr_max(corr)
+        # correlate master event and waveform i
+        corr = correlate(masterEvent[0],event[0],event[0].stats.npts,normalize='naive',demean=False,method='auto')
+        shift, corrCoef = xcorr_max(corr)
 
     # save output
     shifts[i] = shift
     corrCoefs[i] = corrCoef
     if save:
-        event.write(outPath + type + '_waveforms.h5','H5',mode='a')
+        event.write(outPath + type + '_waveforms_' + str(freq[0]) + "-" + str(freq[1]) + 'Hz.h5','H5',mode='a')
 
     # give the user some output
     print("Correlated master event with " + str(round(i/len(det)*100)) + "% of events")

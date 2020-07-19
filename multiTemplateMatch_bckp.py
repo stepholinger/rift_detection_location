@@ -112,6 +112,9 @@ def multiTemplateMatch(path,stat,chans,tempLimsLow,freqLow,threshLow,tempLimsHig
                 detectionsLow,sl = correlation_detector(stLow,stTempLow,threshLow,distance)
                 detectionsHigh,sh = correlation_detector(stHigh,stTempHigh,threshHigh,distance)
 
+                print(len(detectionsLow))
+                print(len(detectionsHigh))
+
                 # extract time values from detections
                 differences = np.zeros((len(detectionsLow),len(detectionsHigh)))
 
