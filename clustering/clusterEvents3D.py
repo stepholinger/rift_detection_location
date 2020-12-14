@@ -1,6 +1,7 @@
 import tslearn
 from tslearn.generators import random_walks
 from tslearn.preprocessing import TimeSeriesScalerMeanVariance
+from tslearn.clustering import TimeSeriesKMeans
 from tslearn.clustering import KShape
 import matplotlib.pyplot as plt
 import time
@@ -10,6 +11,9 @@ from obspy.signal.cross_correlation import correlate
 from obspy.signal.cross_correlation import xcorr_max
 import h5py
 
+# NOTE: the aligned waves produced by this code are the ACTUAL DATA, not the preprocessed input for clustering.
+# This means it's suitable for seismic analysis and plotting but NOT silhouettes!
+
 # read in waveforms
 # define path to data and templates
 path = "/media/Data/Data/PIG/MSEED/noIR/"
@@ -18,9 +22,10 @@ fs = 2
 chans = ["HHZ","HHN","HHE"]
 
 # set paramters
-norm_component = 0
+method = "k_shape"
+norm_component = 1
 skipClustering = 0
-numCluster = 28
+numCluster = 5
 type = "short"
 
 # set length of wave snippets in seconds
@@ -31,21 +36,40 @@ snipLen = 500
 prefiltFreq = [0.05,1]
 
 # load matrix of waveforms
-for c in range(len(chans)):
-    waveform_file = h5py.File(templatePath + type + "_waveform_matrix_" + chans[c] + "_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
-    waveform_matrix = list(waveform_file['waveforms'])
-    if c == 0:
-        waves = np.empty((len(waveform_matrix),0),'float64')
-    waves = np.hstack((waves,waveform_matrix))
+print("Loading and normalizing input data...")
 
-    # close h5 file
-    waveform_file.close()
+# read in pre-aligned 3-component traces
+if method == "k_means":
+        if norm_component:
+            waveform_file = h5py.File(templatePath + type + "_normalized_3D_clustering/" + method + "/aligned_all_waveform_matrix_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
+            waves = np.array(list(waveform_file['waveforms']))
+            waveform_file.close()
+        else:
+            waveform_file = h5py.File(templatePath + type + "_3D_clustering/" + method + "/aligned_all_waveform_matrix_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
+            waves = np.array(list(waveform_file['waveforms']))
+            waveform_file.close()
+else:
+    # read in trace for each component and concatenate
+    for c in range(len(chans)):
+        waveform_file = h5py.File(templatePath + type + "_waveform_matrix_" + chans[c] + "_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
+        waveform_matrix = list(waveform_file['waveforms'])
+        if c == 0:
+            waves = np.empty((len(waveform_matrix),0),'float64')
+
+        # normalize each component
+        if norm_component:
+            waveform_matrix = np.divide(waveform_matrix,np.amax(np.abs(waveform_matrix),axis=1,keepdims=True))
+
+        waves = np.hstack((waves,waveform_matrix))
+
+        # close h5 file
+        waveform_file.close()
 
 # change path variables
 if norm_component:
-    templatePath = templatePath + type + "_normalized_3D_clustering/"
+    templatePath = templatePath + type + "_normalized_3D_clustering/" + method + "/"
 else:
-    templatePath = templatePath + type + "_3D_clustering/"
+    templatePath = templatePath + type + "_3D_clustering/" + method + "/"
 
 # give output
 print("Algorithm will run on " + str(len(waves)) + " waveforms")
@@ -53,22 +77,15 @@ print("Algorithm will run on " + str(len(waves)) + " waveforms")
 # scale mean around zero
 input_waves = TimeSeriesScalerMeanVariance(mu=0., std=1.).fit_transform(waves)
 
-# normalize everything
-print("Normalizing input data...")
-if norm_component:
-    for i in range(len(input_waves)):
-        for c in range(len(chans)):
-            input_waves[i,(snipLen*fs+1)*c:(snipLen*fs+1)*(c+1)] = input_waves[i,(snipLen*fs+1)*c:(snipLen*fs+1)*(c+1)]/max(np.abs(input_waves[i,(snipLen*fs+1)*c:(snipLen*fs+1)*(c+1)]))
+# run clustering or skip and load results if desired
+if skipClustering:
+    clustFile = h5py.File(templatePath + str(numCluster) +  "/" + str(numCluster) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","r")
+    pred = np.array(list(clustFile["cluster_index"]))
+    centroids = list(clustFile["centroids"])
+    clustFile.close()
 else:
-    for i in range(len(input_waves)):
-        input_waves[i,:] = input_waves[i,:]/max(np.abs(input_waves[i,:]))
-
-# save result
-if skipClustering == 0:
-
-    # run clustering
     print("Clustering...")
-    ks = KShape(n_clusters=numCluster, n_init=1, random_state=0).fit(input_waves)
+    ks = KShape(n_clusters=numCluster, n_init=1, random_state=0)
     pred = ks.fit_predict(input_waves)
 
     clustFile = h5py.File(templatePath + str(numCluster) +  "/" + str(numCluster) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","w")
@@ -77,14 +94,11 @@ if skipClustering == 0:
     clustFile.create_dataset("inertia",data=ks.inertia_)
     clustFile.close()
 
+    modelFile = templatePath + str(numCluster) +  "/" + str(numCluster) + "_cluster_model_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5"
+    ks.to_hdf5(modelFile)
+
     # load some variables
     centroids = ks.cluster_centers_
-
-if skipClustering:
-    clustFile = h5py.File(templatePath + str(numCluster) +  "/" + str(numCluster) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","r")
-    pred = np.array(list(clustFile["cluster_index"]))
-    centroids = list(clustFile["centroids"])
-    clustFile.close()
 
 # for each cluster, cross correlate, align and plot each event in the cluster in reference to the centroid
 for c in range(numCluster):
@@ -159,17 +173,23 @@ for c in range(numCluster):
 
     # plot all waves and mean waveform (amplitudes preserved)
     if norm_component:
-        for w in range(round(len(clusterEventsAligned_norm)/100)):
+        for w in range(round(len(clusterEventsAligned_norm))):
         #for w in range(len(clusterEventsAligned_norm)):
             ax[0].plot(t,clusterEventsAligned_norm[w],'k',alpha=0.0025)
-        cluster_mean_wave = np.mean(clusterEventsAligned_norm,axis=0)
-        ax[0].plot(t,cluster_mean_wave)
+        try:
+            cluster_mean_wave = np.nanmean(clusterEventsAligned_norm,axis=0)
+            ax[0].plot(t,cluster_mean_wave)
+        except:
+            pass
     else:
         for w in range(len(clusterEventsAligned)):
             ax[0].plot(t,clusterEventsAligned[w],'k',alpha=0.0025)
-        cluster_mean_wave = np.mean(clusterEventsAligned[sortIdx,:],axis=0)
-        ax[0].plot(t,cluster_mean_wave*5)
-        ax[0].set_ylim([-10*max(abs(cluster_mean_wave)),10*max(abs(cluster_mean_wave))])
+        cluster_mean_wave = np.nanmean(clusterEventsAligned[sortIdx,:],axis=0)
+        try:
+            ax[0].plot(t,cluster_mean_wave*5)
+            ax[0].set_ylim([-10*np.nanmax(abs(cluster_mean_wave)),10*np.nanmax(abs(cluster_mean_wave))])
+        except:
+            pass
     xPos = [snipLen,snipLen*2]
     for xc in xPos:
         ax[0].axvline(x=xc,color='k',linestyle='--')

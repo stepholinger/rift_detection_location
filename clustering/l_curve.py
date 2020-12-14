@@ -11,33 +11,57 @@ from obspy.signal.cross_correlation import xcorr_max
 import h5py
 
 path = "/media/Data/Data/PIG/MSEED/noIR/"
-templatePath = "/home/setholinger/Documents/Projects/PIG/detections/templateMatch/multiTemplate/run3/short_3D_clustering/"
+templatePath = "/home/setholinger/Documents/Projects/PIG/detections/templateMatch/multiTemplate/run3/short_normalized_3D_clustering/"
+method = "k_shape"
 
 prefiltFreq = [0.05,1]
 
-numClusters = range(2,31)
+numClusters = range(3,40)
 
 # first version, using inertia values from clustering
 inertia_vect = np.zeros((len(numClusters),1))
 d_inertia_dt = np.zeros((len(numClusters),1))
+sqrt_inertia_vect = np.zeros((len(numClusters),1))
+dd_rms_ddt = np.zeros((len(numClusters),1))
 
 for f in range(len(numClusters)):
     try:
-        clustFile = h5py.File(templatePath + str(numClusters[f]) + "/" + str(numClusters[f]) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","r")
+        clustFile = h5py.File(templatePath + method + "/" + str(numClusters[f]) + "/" + str(numClusters[f]) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","r")
         inertia = clustFile['inertia']
         inertia_vect[f] = inertia[()]
+        sqrt_inertia_vect[f] = np.sqrt(inertia_vect[f])
         if f > 0:
             d_inertia_dt[f-1] = inertia_vect[f]-inertia_vect[f-1]
+            dd_rms_ddt[f] = sqrt_inertia_vect[f+1] + sqrt_inertia_vect[f-1] - 2*sqrt_inertia_vect[f]
         clustFile.close()
     except:
         pass
+
 plt.plot(numClusters,inertia_vect)
 plt.xlabel("Number of clusters")
 plt.ylabel("Inertia")
 plt.gca().set_ylim([np.min(inertia_vect[np.nonzero(inertia_vect)]),0.7])
 #plt.show()
-plt.savefig(templatePath + "inertia_l_curve.png")
+plt.savefig(templatePath + method + "/inertia_l_curve.png")
 plt.close()
+
+plt.plot(numClusters,sqrt_inertia_vect)
+plt.xlabel("Number of clusters")
+plt.ylabel("sqrt(inertia)")
+#plt.gca().set_ylim([np.min(sqrt_inertia_vect[np.nonzero(sqrt_inertia_vect)]),0.7])
+#plt.show()
+plt.savefig(templatePath + method + "/rms_l_curve.png")
+plt.close()
+
+plt.plot(numClusters,dd_rms_ddt)
+plt.xlabel("Number of clusters")
+plt.ylabel("2nd Derivative of RMS")
+plt.gca().set_ylim([np.min(dd_rms_ddt[np.nonzero(dd_rms_ddt)]),np.max(dd_rms_ddt[np.nonzero(dd_rms_ddt)])])
+#plt.show()
+plt.savefig(templatePath + method + "/2nd_der_rms_l_curve.png")
+plt.close()
+
+
 #plt.plot(numClusters,d_inertia_dt)
 #plt.show()
 #

@@ -15,9 +15,13 @@ import h5py
 path = "/media/Data/Data/PIG/MSEED/noIR/"
 templatePath = "/home/setholinger/Documents/Projects/PIG/detections/templateMatch/multiTemplate/run3/"
 fs = 2
+chans = ["HHZ","HHN","HHE"]
 
 # set paramters
-maxClusters = 10
+method = "k_shape"
+norm_component = 0
+numClusters = range(27,28)
+type = 'short'
 
 # set length of wave snippets in seconds
 snipLen = 500
@@ -25,24 +29,44 @@ snipLen = 500
 # read in h5 file of single channel templates- we will use the start and end times to make 3-component templates
 prefiltFreq = [0.05,1]
 
-# load matrix of waveforms
-waveform_file = h5py.File(templatePath +"short_waveform_matrix_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
-waveform_matrix = list(waveform_file['waveforms'])
-waves = np.array(waveform_matrix.copy())
 
-# close h5 file
-waveform_file.close()
+# load matrix of waveforms
+print("Loading and normalizing input data...")
+
+# read in pre-aligned 3-component traces
+if method == "k_means":
+        waveform_file = h5py.File(templatePath + type + "_3D_clustering/" + method + "/aligned_all_waveform_matrix_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
+        input_waves = np.array(list(waveform_file['waveforms']))
+        waveform_file.close()
+else:
+    # read in trace for each component and concatenate
+    for c in range(len(chans)):
+        waveform_file = h5py.File(templatePath + type + "_waveform_matrix_" + chans[c] + "_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5",'r')
+        waveform_matrix = list(waveform_file['waveforms'])
+        if c == 0:
+            input_waves = np.empty((len(waveform_matrix),0),'float64')
+
+        input_waves = np.hstack((input_waves,waveform_matrix))
+
+        # close h5 file
+        waveform_file.close()
+waves = input_waves
+
+# change path variables
+if norm_component:
+    templatePath = templatePath + type + "_normalized_3D_clustering/" + method + "/"
+else:
+    templatePath = templatePath + type + "_3D_clustering/" + method + "/"
 
 # make plot
-fig,ax = plt.subplots(nrows=maxClusters,ncols=maxClusters,sharex=False,sharey=False,figsize=(20,20))
-[axi.set_axis_off() for axi in ax.ravel()]
+#fig,ax = plt.subplots(nrows=maxClusters,ncols=maxClusters,sharex=False,sharey=False,figsize=(20,20))
+#[axi.set_axis_off() for axi in ax.ravel()]
 
 # for each cluster, cross correlate, align and plot each event in the cluster in reference to the centroid
-for n in range(1,maxClusters):
+for numCluster in numClusters:
 
     # load clustering results
-    numCluster = n+1
-    outFile = h5py.File(templatePath + "clustering/" + str(numCluster) +  "/" + str(numCluster) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","r")
+    outFile = h5py.File(templatePath + str(numCluster) +  "/" + str(numCluster) + "_cluster_predictions_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","r")
     pred = np.array(list(outFile["cluster_index"]))
     centroids = list(outFile["centroids"])
     outFile.close()
