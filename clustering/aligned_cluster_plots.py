@@ -19,9 +19,9 @@ fs = 2
 chans = ["HHZ","HHN","HHE"]
 
 # set paramters
-method = "k_shape"
+method = "modified_k_shape"
 norm_component = 0
-numClusters = range(27,28)
+numClusters = range(20,21)
 type = "short"
 
 # set length of wave snippets in seconds

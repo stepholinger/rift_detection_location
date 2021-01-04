@@ -15,9 +15,9 @@ path = "/media/Data/Data/PIG/MSEED/noIR/"
 templatePath = "/home/setholinger/Documents/Projects/PIG/detections/templateMatch/multiTemplate/run3/"
 
 type = "short"
-method = "k_shape"
+method = "modified_k_shape"
 norm_component = 0
-numClusters = range(2,40)
+numClusters = range(20,21)
 
 fs = 2
 snipLen = 500

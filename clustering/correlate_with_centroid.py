@@ -18,9 +18,9 @@ fs = 2
 chans = ["HHZ","HHN","HHE"]
 
 # set paramters
-method = "k_shape"
+method = "modified_k_shape"
 norm_component = 0
-numClusters = range(27,28)
+numClusters = range(20,21)
 type = 'short'
 
 # set length of wave snippets in seconds
@@ -82,7 +82,7 @@ for numCluster in numClusters:
 
         # make empty array for storage
         clusterEvents = waves[pred == c]
-        clusterEventsAligned = np.zeros((len(waves[pred == c]),snipLen*fs+1))
+        clusterEventsAligned = np.zeros((len(waves[pred == c]),(snipLen*fs+1)*len(chans)))
         corrCoefs = np.zeros((len(waves[pred == c])))
         shifts = np.zeros((len(waves[pred == c])))
 
@@ -125,12 +125,12 @@ for numCluster in numClusters:
         sortIdx = np.array(np.argsort(abs(corrCoefs))[::-1])
 
         # save cross correlation results
-        outFile = h5py.File(templatePath + "clustering/" + str(numCluster) + "/centroid" + str(c) + "_correlations_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","w")
+        outFile = h5py.File(templatePath + str(numCluster) + "/centroid" + str(c) + "_correlations_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","w")
         outFile.create_dataset("corrCoefs",data=corrCoefs)
         outFile.create_dataset("shifts",data=shifts)
         outFile.close()
 
         # save aligned cluster waveforms
-        outFile = h5py.File(templatePath + "clustering/" + str(numCluster) + "/aligned_cluster" + str(c) + "_waveform_matrix_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","w")
+        outFile = h5py.File(templatePath + str(numCluster) + "/aligned_cluster" + str(c) + "_waveform_matrix_" + str(prefiltFreq[0]) + "-" + str(prefiltFreq[1]) + "Hz.h5","w")
         outFile.create_dataset("waveforms",data=clusterEventsAligned)
         outFile.close()
