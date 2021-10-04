@@ -10,6 +10,8 @@ import h5py
 import pathlib
 import matplotlib.pyplot as plt
 
+
+
 def load_waveform(c,detection_time):
     
     # read in data for template
