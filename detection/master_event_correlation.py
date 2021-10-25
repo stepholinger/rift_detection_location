@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 
 
 
-def correlate_master(master_event,waveforms,method):
+def correlate_master(master_event,waveforms,max_shift,method):
 
     # open file for output
     home_dir = str(pathlib.Path().absolute())
@@ -24,7 +24,7 @@ def correlate_master(master_event,waveforms,method):
     for i in range(len(waveforms)):
 
         # correlate master event and waveform i
-        correlation_timeseries = correlate(master_event[0],waveforms[i],master_event[0].stats.npts)
+        correlation_timeseries = correlate(master_event[0],waveforms[i],max_shift)
         shift, correlation_coefficient = xcorr_max(correlation_timeseries)
 
         # save output

@@ -1,0 +1,6 @@
+# ignore outputs
+outputs
+data
+*.h5
+*.pickle
+figures/animate_backazimuth_files

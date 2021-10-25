@@ -15,7 +15,7 @@ import glob
 import copy
 import multiprocessing
 import pickle
-
+import matplotlib.pyplot as plt
 
 
 def write_parameters(d):
@@ -70,6 +70,7 @@ def first_observed_arrival(st,l):
             first_stat = counts[0][0]
     else:
         first_stat = counts[0][0]
+    #print(first_stat_vector)
     return first_stat
 
 
@@ -97,20 +98,18 @@ def get_station_coordinates(l):
 
 
 
-def get_array_centroid(l):
+def get_array_centroid(station_grid_coords):
     # convert station coordinates to x and y and take average station location
-    avg_stat_x = np.mean(l.station_grid_coords[:,0])
-    avg_stat_y = np.mean(l.station_grid_coords[:,1])
+    avg_stat_x = np.mean(station_grid_coords[:,0])
+    avg_stat_y = np.mean(station_grid_coords[:,1])
     return [avg_stat_x,avg_stat_y]
 
 
 
 def get_station_locations(l):
-    # convert station coordinates to x and y and take average station location
-    p2 = Proj("EPSG:3031",preserve_units=False)
-    p1 = Proj(proj='latlong',preserve_units=False)
-    [stat_x,stat_y] = transform(p1,p2,l.station_lon_lat_coords[:,0],l.station_lon_lat_coords[:,1])
-    return np.transpose(np.array([stat_x,stat_y]))
+    p = Proj("EPSG:3031", preserve_units=False)
+    station_grid_coords = p(l.station_lon_lat_coords[:,0],l.station_lon_lat_coords[:,1])
+    return np.stack(station_grid_coords,axis=1)
 
 
 
@@ -200,13 +199,12 @@ def compute_pca(st,l):
         if X.size > 0:
             # normalize and compute the PCA if staLta criteria is met for BOTH components
             if np.mean(abs(X[:,0])) > l.stalta_threshold*np.mean(abs(horz_data[:,0])) and np.mean(abs(X[:,1])) > l.stalta_threshold*np.mean(abs(horz_data[:,1])):
-
                 # find component with max amplitude, normalize both traces by that max value, and compute PCA
                 max_amp = np.amax(abs(X))
                 X_norm = np.divide(X,max_amp)
                 pca = PCA(n_components = 2)
                 pca.fit(X_norm)
-
+                
                 # flip pca components based on station of first arrival
                 first_components = correct_pca(pca.components_[0,:],l)
 
@@ -292,7 +290,8 @@ def polarization_analysis(l):
     # read and filter the day of data
     st = obspy.read(l.f)
     st.filter("bandpass",freqmin=l.freq[0],freqmax=l.freq[1])
-
+    #print("read and filtered " + l.f)
+        
     # make containers for today's results
     event_baz_vect = np.empty((num_detections_today),'float64')
     event_baz_vect[:] = np.nan
@@ -369,39 +368,55 @@ def polarization_analysis(l):
                 normalized_first_component_sums[n,0] = first_component_sums[n,0]/vect_len
                 normalized_first_component_sums[n,1] = first_component_sums[n,1]/vect_len
         event_uncertainty_vect[i] = (circular_stdev(normalized_first_component_sums,weights)*180/np.pi)
-        print("Finished with " + str(detection_times_today[i].date()))
+    print("Finished with " + str(detection_times_today[0].date()))
+        
+        # do the primitive histogram for debugging
+#         backazimuths = []
+#         for f in range(len(first_component_sums)):
+#             if not np.sum(first_component_sums[f,0]) == 0:
+#                 backazimuths.append(get_baz(first_component_sums[f,:]))
+#         plt.hist(backazimuths,bins=np.linspace(0,360,37))  
+#         plt.show()
+        #print(event_baz_vect[i])
+    
     return event_baz_vect,event_uncertainty_vect,indices
 
 
-#def compute_backazimuths(l,detection_times): 
-def compute_backazimuths(l,ds): 
+def compute_backazimuths(l,detection_times): 
+#def compute_backazimuths(l,ds): 
     
     # get home directory path
     home_dir = str(pathlib.Path().absolute())
     
     # get useful geometric information about the array
     l.station_lon_lat_coords = get_station_coordinates(l)
-    l.station_grid_coords = get_station_locations(l)
-    l.array_centroid = get_array_centroid(l)
+    l.station_epsg_3031_coords = get_station_locations(l)
+    station_grid_coords = np.stack((l.station_epsg_3031_coords[:,1],l.station_epsg_3031_coords[:,0]*-1),axis=1)
+    l.station_grid_coords = station_grid_coords
+    l.array_centroid = get_array_centroid(l.station_grid_coords)
     l.station_angles = get_station_angles(l)
     
     # get all detection times
-    l.detection_times = get_detection_times(ds)
-    #l.detection_times = detection_times
+    l.detection_times = detection_times
+    #l.detection_times = get_detection_times(ds)
     l.num_detections = len(l.detection_times)
         
     # make object for storing pca vector sums and storing data to plot
     b = make_results_object(l)
 
-    # write file with parameters for this run
-    write_parameters(l)
-    
     # open output file
     baz_file = open(l.filename, "wb")
     
+    # write file with parameters for this run
+    #write_parameters(l)
+    
     # make vector of all filenames
     files = get_files(l.data_path)
+#     files = ["/media/Data/Data/PIG/MSEED/noIR/PIG2/HHZ/2012-03-26.PIG2.HHZ.noIR.MSEED"]
+#     files = [f.replace("PIG2","PIG*") for f in files]
+#     files = [f.replace("HHZ","HH*") for f in files]
     print("Got all files...")
+    
     # construct iterable list of detection parameter objects for imap
     inputs = []
     for f in files:
