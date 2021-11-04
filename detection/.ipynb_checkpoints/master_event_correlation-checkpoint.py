@@ -12,7 +12,7 @@ def correlate_master(master_event,waveforms,max_shift,method):
 
     # open file for output
     home_dir = str(pathlib.Path().absolute())
-    out_file = h5py.File(home_dir + "/outputs/" + method + "_correlations.h5","w")
+    out_file = h5py.File(home_dir + "/outputs/detection/" + method + "_correlations.h5","w")
 
     # make some arrays for storing output
     shifts = np.zeros((len(waveforms)))

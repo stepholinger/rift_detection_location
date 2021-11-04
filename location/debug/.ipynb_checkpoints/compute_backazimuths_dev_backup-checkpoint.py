@@ -216,8 +216,10 @@ def compute_pca(st,l):
                 # flip pca components based on station of first arrival
                 if l.pca_correction == "radial":
                     first_components = correct_pca_radial(pca.components_[0,:],l)
-                if l.pca_correction == "new":
-                    first_components = correct_pca_new(pca.components_[0,:],l)
+                if l.pca_correction == "distance":
+                    first_components = correct_pca_distance(pca.components_[0,:],l)
+                if l.pca_correction == "sector":
+                    first_components = correct_pca_sector(pca.components_[0,:],l)
                 if l.pca_correction == "old":                
                     first_components = correct_pca_old(pca.components_[0,:],l)
 
@@ -530,7 +532,7 @@ def correct_pca_old(pca_components,l):
 
 
 
-def correct_pca_new(pca_components,l):
+def correct_pca_distance(pca_components,l):
     # get the backazimuth corresponding to the observed polarization direction
     baz = 90 - np.arctan2(pca_components[1],pca_components[0])*180/np.pi
     if baz < 0:
@@ -563,6 +565,31 @@ def correct_pca_new(pca_components,l):
     if l.first_stat == sector_1_first_arrival:
         corrected_pca_components = pca_components 
     if l.first_stat == sector_2_first_arrival:
+        corrected_pca_components = pca_components*-1
+    else:
+        corrected_pca_components = [np.nan,np.nan]
+    return corrected_pca_components
+
+
+
+def correct_pca_sector(pca_components,l):
+    # get the backazimuth corresponding to the observed polarization direction
+    baz = 90 - np.arctan2(pca_components[1],pca_components[0])*180/np.pi
+    if baz < 0:
+        baz = baz + 360
+    
+    # calculate the distance from the array centroid to each station IN THE DIRECTION OF THE CALCULATED BACKAZIMUTH
+    sector_1_stations = []
+    sector_2_stations = []    
+    for s in range(len(l.station_angles)):
+        if angle_difference(l.station_angles[s],baz) < 90:
+            sector_1_stations.append(l.stations[s])
+        if angle_difference(l.station_angles[s],baz) > 90:
+            sector_2_stations.append(l.stations[s])
+
+    if l.first_stat in sector_1_stations:
+        corrected_pca_components = pca_components 
+    if l.first_stat in sector_2_stations:
         corrected_pca_components = pca_components*-1
     else:
         corrected_pca_components = [np.nan,np.nan]
