@@ -3,6 +3,7 @@ import numpy as np
 import pathlib
 from pyproj import Proj,transform,Geod
 import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
 import rasterio
 from rasterio.plot import show
 from rasterio.warp import calculate_default_transform, reproject, Resampling
@@ -12,7 +13,11 @@ from matplotlib.dates import date2num
 from matplotlib.dates import DateFormatter
 from location.compute_backazimuths import get_station_coordinates
 from location.compute_backazimuths import get_station_grid_locations
-
+import geopandas as gpd
+import cartopy
+import cartopy.crs as ccrs
+from shapely import geometry
+from collections import namedtuple
 
 
 def transform_imagery(file,dst_crs):
@@ -84,7 +89,7 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     bounds = sat_imagery.bounds
     horz_len = bounds[2]-bounds[0]
     vert_len = bounds[3]-bounds[1]
-    plot_bounds = [bounds[0]+0.35*horz_len,bounds[2]-0.25*horz_len,bounds[1]+0.25*vert_len,bounds[3]-0.35*vert_len]
+    plot_bounds = [bounds[0]+0.35*horz_len,bounds[2]-0.25*horz_len,bounds[1]+0.25*vert_len,bounds[3]-0.4*vert_len]
     ax_image.imshow(sat_data,cmap='gray',extent=[bounds[0],bounds[2],bounds[1],bounds[3]])
 
 
@@ -142,9 +147,27 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     ax_stats.set_xlim([plot_bounds[0],plot_bounds[1]])
     ax_stats.set_ylim([plot_bounds[2],plot_bounds[3]])
     ax_stats.axis('off')
-    plt.savefig("outputs/figures/backazimuths.png",bbox_inches="tight")
-    #plt.show()
     
+    # add North arrow
+    line_x,line_y = transform(p1,p2,np.linspace(-102.2,-102.2,100),np.linspace(-74.65,-74.6,100))
+    ax_stats.plot(line_x,line_y,color='w',linewidth = 5)
+    ax_stats.scatter(line_x[-1],line_y[-1],marker=(3,0,4),c='w',s=400)
+    ax_stats.text(line_x[-1]-3500,line_y[-1]-2500,"N",color='w',fontsize=25)
+    
+    # add scale bar
+    ax_stats.plot([plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2-10000,plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2+10000],[plot_bounds[2]+17500,plot_bounds[2]+17500],color='w',linewidth = 5)
+    ax_stats.text(plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2-4000,plot_bounds[2]+14000,"20 km",color='w',fontsize=25)
+
+    # add inset figure of antarctica
+    world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
+    ax_inset = fig.add_axes([0.765,0.7,0.275,0.275],projection = ccrs.SouthPolarStereo())
+    ax_inset.set_extent([-180, 180, -90, -65], crs=ccrs.PlateCarree())
+    geom = geometry.box(minx=-103,maxx=-99,miny=-75.5,maxy=-74.5)
+    ax_inset.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor='k',facecolor='none', linewidth=1)
+    ax_inset.add_feature(cartopy.feature.OCEAN, facecolor='#A8C5DD', edgecolor='none')
+    
+    plt.savefig("outputs/figures/backazimuths.png",bbox_inches="tight")
+
     
     
 def load_waveform(detection_time,s):
