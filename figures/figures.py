@@ -90,7 +90,10 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     horz_len = bounds[2]-bounds[0]
     vert_len = bounds[3]-bounds[1]
     plot_bounds = [bounds[0]+0.35*horz_len,bounds[2]-0.25*horz_len,bounds[1]+0.25*vert_len,bounds[3]-0.4*vert_len]
-    ax_image.imshow(sat_data,cmap='gray',extent=[bounds[0],bounds[2],bounds[1],bounds[3]])
+    c_map = [np.min(sat_data),np.max(sat_data)]
+    c_map_range = c_map[1]-c_map[0]
+    ax_image.imshow(sat_data,cmap='gray',extent=[bounds[0],bounds[2],bounds[1],bounds[3]],interpolation='none', vmin=np.min(sat_data), vmax=np.max(sat_data)-0.2*c_map_range)
+    #ax_image.imshow(sat_data,cmap='gray',extent=[bounds[0],bounds[2],bounds[1],bounds[3]])
 
 
     # define, transform, and plot lat/lon grid
@@ -101,12 +104,12 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     line = np.linspace(-110,-90,100)
     for i in lat:
         line_x,line_y = transform(p1,p2,line,np.linspace(i,i,100))
-        ax_image.plot(line_x,line_y,linestyle='--',linewidth=2,c='gray',alpha=1)
+        ax_image.plot(line_x,line_y,linestyle='--',linewidth=2,c='w',alpha=0.75)
         y_lab_pos.append(line_y[np.argmin(np.abs(line_x-plot_bounds[0]))])
     line = np.linspace(-80,-70,100)
     for i in lon:
         line_x,line_y = transform(p1,p2,np.linspace(i,i,100),line)
-        ax_image.plot(line_x,line_y,linestyle='--',linewidth=2,c='gray',alpha=1)
+        ax_image.plot(line_x,line_y,linestyle='--',linewidth=2,c='w',alpha=0.75)
         x_lab_pos.append(line_x[np.argmin(np.abs(line_y-plot_bounds[2]))])
 
     # set ticks and labels for lat/lon grid
@@ -118,7 +121,7 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     ax_image.set_ylabel("Latitude",fontsize=25)
     ax_image.set_xlim([plot_bounds[0],plot_bounds[1]])
     ax_image.set_ylim([plot_bounds[2],plot_bounds[3]])
-    ax_image.set_title("Event backazimuths",fontsize=25)
+    #ax_image.set_title("Event Backazimuths",fontsize=25)
     
     # properly center the polar plot on the array centroid
     x_pos = (array_centroid[0]-plot_bounds[0])/(plot_bounds[1]-plot_bounds[0])
@@ -163,7 +166,7 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     ax_inset = fig.add_axes([0.765,0.7,0.275,0.275],projection = ccrs.SouthPolarStereo())
     ax_inset.set_extent([-180, 180, -90, -65], crs=ccrs.PlateCarree())
     geom = geometry.box(minx=-103,maxx=-99,miny=-75.5,maxy=-74.5)
-    ax_inset.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor='k',facecolor='none', linewidth=1)
+    ax_inset.add_geometries([geom], crs=ccrs.PlateCarree(), edgecolor='r',facecolor='none', linewidth=1)
     ax_inset.add_feature(cartopy.feature.OCEAN, facecolor='#A8C5DD', edgecolor='none')
     
     plt.savefig("outputs/figures/backazimuths.png",bbox_inches="tight")
@@ -228,19 +231,19 @@ def get_stacks(waveforms,detection_dates,correlation_coefficients,cluster,shifts
     end_date = detection_dates[-1]
     num_days = end_date-start_date
 
-    stacks = []
+    daily_stacks = []
     for d in range(num_days.days):
         day = start_date + timedelta(days=d)
         waves_today = aligned_cluster_events[detection_dates == day,:]
         #waves_today = np.divide(waves_today,np.nanmax(np.abs(waves_today),axis=1,keepdims=True))
-        stack = np.divide(np.nansum(waves_today,axis = 0),np.sum([detection_dates == day]))
-        stacks.append(stack)
-
-    return stacks
+        daily_stack = np.divide(np.nansum(waves_today,axis = 0),np.sum([detection_dates == day]))
+        daily_stacks.append(daily_stack)
+    stack = np.nanmean(aligned_cluster_events,axis=0)
+    return daily_stacks,stack
     
     
     
-def plot_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,colors,color_bounds,labels,backazimuths,plot_type):
+def plot_daily_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,stacks,colors,baz_bounds,backazimuths):
     # take care of some timing details we need for plotting
     start_date = detection_times[0].date()
     start_time = datetime(start_date.year,start_date.month,start_date.day)
@@ -248,59 +251,163 @@ def plot_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_vect,de
     end_time = datetime(end_date.year,end_date.month,end_date.day)+timedelta(days=1)
     binedges = [start_time + timedelta(days=x) for x in range(0,(end_time-start_time).days+1,1)]
     num_days = (end_time-start_time).days                          
-    trace_length = len(daily_stacks[0,:])
-  
-    # normalize the stacks for plotting
-    daily_stacks = np.array(daily_stacks)[:,200:620]
-    norm_daily_stacks = np.divide(daily_stacks,np.amax(np.abs(daily_stacks),axis=1,keepdims=True))
-    norm_daily_stacks = np.transpose(norm_daily_stacks)
+    trace_length = len(daily_stacks[0][0,:])
 
     # make plot
-    fig,ax = plt.subplots(nrows=2,ncols=1,sharex=True,sharey=False,gridspec_kw={'height_ratios':[2,1]},figsize=(15,15))
-
-    # plot event timeseries                       
-    for i in range(len(color_bounds)):
-        bool_indices = np.logical_and(backazimuths>=color_bounds[i][0],backazimuths<color_bounds[i][1])
-        baz_group_times = detection_times[bool_indices]
-        if plot_type == "timeseries":
-            ax[0].hist(baz_group_times,binedges,facecolor=colors[i],label=labels[i])
-        if plot_type == "cumulative":
-            events_per_day,_ = np.histogram(baz_group_times,binedges)
-            cumulative_event_count = np.cumsum(events_per_day)
-            ax[0].plot(binedges[:-1],cumulative_event_count,color=colors[i],label=labels[i])
-    if plot_type == "timeseries":
-        ax[0].set_ylabel("Events per day")
-    if plot_type == "cumulative":
-        ax[0].set_ylabel("Cumulative event count")
-    ax[0].legend(loc="upper right")
-    ax[0].set_title("(a) Event timeseries and GPS ice velocity")
+    fig = plt.figure(figsize=(15,15))
+    gs = fig.add_gridspec(nrows=10,ncols=2, hspace=0,height_ratios=[2,0.5,1,1,0.5,1,1,0.5,1,1],width_ratios=[1,0.1])
+    ax = gs.subplots(sharex=False,sharey=False)
     
-    # plot gps ice velocity                         
-    ax2 = ax[0].twinx()
-    ax2.plot(gps_time_vect,gps_velocity, c = 'k')
-    ax2.set_ylabel("Velocity (m/year)           ",loc='top')
-    ax2.set_ylim(3700,4025)
-    ax2.set_yticks([3850,3900,3950,4000])
+    # plot gps ice velocity
+    ax[0,0].plot(gps_time_vect,gps_velocity, c = 'k')
+    ax[0,0].set_ylabel("Velocity (m/year)")
+    ax[0,0].set_ylim(3800,4050)
+    ax[0,0].set_yticks([3850,3900,3950,4000])
+    ax[0,0].xaxis.set_tick_params(which='both', labelbottom=True)
+    ax[0,0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
+    ax[0,0].set_title("a",loc="left",fontsize=25)
 
     # plot rms noise level                       
-    ax3 = ax[0].twinx()
-    ax3.spines.right.set_position(("axes",1))
-    ax3.set_yticks([0,2e-6,4e-6])
-    ax3.set_yticklabels(['0','2','4'],c='grey')
-    ax3.set_ylim(0,12e-6)
-    ax3.set_ylabel("\n  Noise RMS \n($10^{-6}$ m/s)",loc="bottom",c="grey")
-    ax3.plot(noise_date_vect,noise_vect,linewidth="0.75",c='silver')
-    
-    # plot waveforms and configure labels
-    ax[1].imshow(norm_daily_stacks,vmin=-0.25,vmax=0.25,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
-    ax[1].set_yticks([0,trace_length/2,trace_length])
-    ax[1].set_yticklabels(['200','100','0'])
-    ax[1].set_ylabel("Time (seconds)")
-    ax[1].set_xlabel("Date")
-    ax[1].set_title("(b) Daily vertical waveform stacks")
+    ax_twin = ax[0,0].twinx()
+    ax_twin.spines.right.set_position(("axes",1))
+    ax_twin.set_yticks([0,2e-6,4e-6,6e-6,8e-6])
+    ax_twin.set_yticklabels(['0','2','4','6','8'],c='grey')
+    ax_twin.set_ylim(0,12e-6)
+    ax_twin.set_ylabel("\n  Noise RMS \n($10^{-6}$ m/s)",c="grey")
+    ax_twin.plot(noise_date_vect,noise_vect,linewidth="0.75",c='silver')
 
-    if plot_type == "cumulative":
-        plt.savefig("outputs/figures/gps_and_cumulative_event_count.png")
-    else:
-        plt.savefig("outputs/figures/gps_and_event_timeseries.png")
+    # make spacing subplot invisible
+    ax[1,0].set_visible(0)
+    ax[0,1].set_visible(0)
+    ax[1,1].set_visible(0)
+
+    # plot event timeseries
+    ax_ind = [2,5,8]
+    letters = ['b','c','d']
+    for i in range(len(baz_bounds)):
+        bool_indices = np.logical_and(backazimuths>=baz_bounds[i][0],backazimuths<baz_bounds[i][1])
+        baz_group_times = detection_times[bool_indices]
+        ax[ax_ind[i],0].hist(baz_group_times,binedges,facecolor=colors[i])
+        ax[ax_ind[i],0].set_ylabel("Events per day")
+        ax[ax_ind[i],0].set_ylim(0,40)
+        ax[ax_ind[i],0].spines['right'].set_visible(False)
+        ax[ax_ind[i],0].spines['top'].set_visible(False)    
+        ax[ax_ind[i],0].set_title(letters[i],loc="left",fontsize=25)
+
+        # normalize the stacks for plotting
+        trim_daily_stacks = np.array(daily_stacks[i])[:,200:515]
+        norm_daily_stacks = np.divide(trim_daily_stacks,np.amax(np.abs(trim_daily_stacks),axis=1,keepdims=True))
+        norm_daily_stacks = np.transpose(norm_daily_stacks)
+        
+        # plot waveforms and configure labels
+        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.25,vmax=0.25,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
+        ax[ax_ind[i]+1,0].set_yticks([0,trace_length/2,trace_length])
+        ax[ax_ind[i]+1,0].set_yticklabels(['150','75','0'])
+        ax[ax_ind[i]+1,0].set_ylabel("Time (s)")
+        ax[ax_ind[i]+1,0].xaxis.set_tick_params(which='both', labelbottom=True)
+        ax[ax_ind[i]+1,0].xaxis_date()
+
+        # plot individual overall stacks on right axis
+        ax[ax_ind[i]+1,1].plot(stacks[i][200:515],np.flip(np.arange(315)))
+        box = ax[ax_ind[i]+1,0].get_position()
+        box.x0 = box.x0 + 0.65
+        box.x1 = box.x0 + 0.05
+        ax[ax_ind[i]+1,1].set_position(box)
+        ax[ax_ind[i]+1,1].axis('off')
+
+        # make spacing subplots invisible
+        ax[ax_ind[i],1].set_visible(0)
+        if ax_ind[i]<8:
+            ax[ax_ind[i]+2,1].set_visible(0)
+            ax[ax_ind[i]+2,0].set_visible(0)
+            
+    ax[9,0].set_xlabel("Date")
+
+    plt.savefig("outputs/figures/gps_and_daily_event_timeseries.png")
+    #plt.show()
+    
+    
+    
+def plot_weekly_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,stacks,colors,baz_bounds,backazimuths):
+    # take care of some timing details we need for plotting
+    start_date = detection_times[0].date()
+    start_time = datetime(start_date.year,start_date.month,start_date.day)
+    end_date = detection_times[-1].date()
+    end_time = datetime(end_date.year,end_date.month,end_date.day)+timedelta(days=1)
+    binedges = [start_time + timedelta(days=x) for x in range(0,(end_time-start_time).days+1,7)]
+    num_days = (end_time-start_time).days                          
+    trace_length = len(daily_stacks[0][0,:])
+
+    # make plot
+    fig = plt.figure(figsize=(15,15))
+    gs = fig.add_gridspec(nrows=10,ncols=2, hspace=0,height_ratios=[2,0.5,1,1,0.5,1,1,0.5,1,1],width_ratios=[1,0.1])
+    ax = gs.subplots(sharex=False,sharey=False)
+    
+    # plot gps ice velocity
+    ax[0,0].plot(gps_time_vect,gps_velocity, c = 'k')
+    ax[0,0].set_ylabel("Velocity (m/year)")
+    ax[0,0].set_ylim(3800,4050)
+    ax[0,0].set_yticks([3850,3900,3950,4000])
+    ax[0,0].xaxis.set_tick_params(which='both', labelbottom=True)
+    ax[0,0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
+    ax[0,0].set_title("a",loc="left",fontsize=25)
+    
+    # plot rms noise level                       
+    ax_twin = ax[0,0].twinx()
+    ax_twin.spines.right.set_position(("axes",1))
+    ax_twin.set_yticks([0,2e-6,4e-6,6e-6,8e-6])
+    ax_twin.set_yticklabels(['0','2','4','6','8'],c='grey')
+    ax_twin.set_ylim(0,12e-6)
+    ax_twin.set_ylabel("\n  Noise RMS \n($10^{-6}$ m/s)",c="grey")
+    ax_twin.plot(noise_date_vect,noise_vect,linewidth="0.75",c='silver')
+
+    # make spacing subplot invisible
+    ax[1,0].set_visible(0)
+    ax[0,1].set_visible(0)
+    ax[1,1].set_visible(0)
+
+    # plot event timeseries
+    ax_ind = [2,5,8]
+    letters = ['b','c','d']
+    for i in range(len(baz_bounds)):
+        bool_indices = np.logical_and(backazimuths>=baz_bounds[i][0],backazimuths<baz_bounds[i][1])
+        baz_group_times = detection_times[bool_indices]
+        ax[ax_ind[i],0].hist(baz_group_times,binedges,facecolor=colors[i])
+        ax[ax_ind[i],0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
+        ax[ax_ind[i],0].set_ylabel("Events per day")
+        ax[ax_ind[i],0].set_ylim(0,120)
+        ax[ax_ind[i],0].spines['right'].set_visible(False)
+        ax[ax_ind[i],0].spines['top'].set_visible(False)    
+        ax[ax_ind[i],0].set_title(letters[i],loc="left",fontsize=25)
+
+        # normalize the stacks for plotting
+        trim_daily_stacks = np.array(daily_stacks[i])[:,200:515]
+        norm_daily_stacks = np.divide(trim_daily_stacks,np.amax(np.abs(trim_daily_stacks),axis=1,keepdims=True))
+        norm_daily_stacks = np.transpose(norm_daily_stacks)
+        
+        # plot waveforms and configure labels
+        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.25,vmax=0.25,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
+        ax[ax_ind[i]+1,0].set_yticks([0,trace_length/2,trace_length])
+        ax[ax_ind[i]+1,0].set_yticklabels(['150','75','0'])
+        ax[ax_ind[i]+1,0].set_ylabel("Time (s)")
+        ax[ax_ind[i]+1,0].xaxis.set_tick_params(which='both', labelbottom=True)
+        ax[ax_ind[i]+1,0].xaxis_date()
+
+        # plot individual overall stacks on right axis
+        ax[ax_ind[i]+1,1].plot(stacks[i][200:515],np.flip(np.arange(315)))
+        box = ax[ax_ind[i]+1,0].get_position()
+        box.x0 = box.x0 + 0.65
+        box.x1 = box.x0 + 0.05
+        ax[ax_ind[i]+1,1].set_position(box)
+        ax[ax_ind[i]+1,1].axis('off')
+
+        # make spacing subplots invisible
+        ax[ax_ind[i],1].set_visible(0)
+        if ax_ind[i]<8:
+            ax[ax_ind[i]+2,1].set_visible(0)
+            ax[ax_ind[i]+2,0].set_visible(0)
+            
+    ax[9,0].set_xlabel("Date",fontsize=15)
+
+    plt.savefig("outputs/figures/gps_and_weekly_event_timeseries.png")
     #plt.show()
