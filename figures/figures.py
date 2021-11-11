@@ -2,6 +2,7 @@ import obspy
 import numpy as np
 import pathlib
 from pyproj import Proj,transform,Geod
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import rasterio
@@ -9,8 +10,7 @@ from rasterio.plot import show
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from datetime import datetime
 from datetime import timedelta
-from matplotlib.dates import date2num
-from matplotlib.dates import DateFormatter
+from matplotlib.dates import date2num, DateFormatter
 from location.compute_backazimuths import get_station_coordinates
 from location.compute_backazimuths import get_station_grid_locations
 import geopandas as gpd
@@ -151,6 +151,14 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     ax_stats.set_ylim([plot_bounds[2],plot_bounds[3]])
     ax_stats.axis('off')
     
+    # add legend for spatial groups
+    x,y = transform(p1,p2,-102.75,-75.175)
+    box = matplotlib.patches.Rectangle((x-1000, y-7000), 27000, 10000, linewidth=1, edgecolor='k', facecolor='w')
+    ax_stats.add_patch(box)
+    ax_stats.text(x, y, "Rift tip",c="#d95f02",fontsize=25)
+    ax_stats.text(x, y-3000, "Rift/margin",c="#1b9e77",fontsize=25)
+    ax_stats.text(x, y-6000, "Northeast margin",c="#7570b3",fontsize=25)
+   
     # add North arrow
     line_x,line_y = transform(p1,p2,np.linspace(-102.2,-102.2,100),np.linspace(-74.65,-74.6,100))
     ax_stats.plot(line_x,line_y,color='w',linewidth = 5)
@@ -158,8 +166,8 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     ax_stats.text(line_x[-1]-3500,line_y[-1]-2500,"N",color='w',fontsize=25)
     
     # add scale bar
-    ax_stats.plot([plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2-10000,plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2+10000],[plot_bounds[2]+17500,plot_bounds[2]+17500],color='w',linewidth = 5)
-    ax_stats.text(plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2-4000,plot_bounds[2]+14000,"20 km",color='w',fontsize=25)
+    ax_stats.plot([plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2-5000,plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2+15000],[plot_bounds[2]+12000,plot_bounds[2]+12000],color='w',linewidth = 5)
+    ax_stats.text(plot_bounds[0]+(plot_bounds[1]-plot_bounds[0])/2,plot_bounds[2]+9000,"20 km",color='w',fontsize=25)
 
     # add inset figure of antarctica
     world = gpd.read_file(gpd.datasets.get_path("naturalearth_lowres"))
@@ -173,11 +181,11 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
 
     
     
-def load_waveform(detection_time,s):
+def load_waveform(r,detection_time):
     
     # read in data for template
-    date_string = detection_time.date().strftime("%Y-%m-%d")
-    fname = s.data_path + s.station + "/" + s.channel + "/*" + date_string + "*"
+    date_string = detection_time.date.strftime("%Y-%m-%d")
+    fname = r.data_path + r.station + "/HH*/*" + date_string + "*"
     st = obspy.read(fname)
 
     # basic preprocessing
@@ -186,15 +194,58 @@ def load_waveform(detection_time,s):
     st.taper(max_percentage=0.01, max_length=10.)
 
     # filter and resample the data to each band
-    st.filter("bandpass",freqmin=s.freq[0],freqmax=s.freq[1])
+    st.filter("bandpass",freqmin=r.freq[0],freqmax=r.freq[1])
+    st.resample(r.freq[1]*2.1)
     
     # make a copy so we only have to read once for all detections on a given day
     event = st.copy()
 
     # trim the data to the time ranges of template for each band
-    event.trim(starttime=obspy.UTCDateTime(detection_time),endtime=obspy.UTCDateTime(detection_time) + s.trace_length)
+    event.trim(starttime=detection_time,endtime=detection_time + r.trace_length)
 
     return st,event
+
+
+
+def get_3D_trace(r,event):
+    fs = r.freq[1]*2.1
+    waveform = np.zeros((3*int(r.trace_length*fs+1)))
+    for i in range(len(event)):
+        trace = event.select(component=r.component_order[i])[0].data
+        waveform[i*int(r.trace_length*fs+1):i*int(r.trace_length*fs+1)+len(trace)] = trace
+    return waveform
+
+
+
+def get_rotated_waveforms(ds,r):
+
+    # make output array
+    fs = r.freq[1]*2.1
+    waveform_matrix = np.zeros((len(ds.events),3*int(r.trace_length*fs+1)))
+    
+    # extract times for each event in the dataset
+    detection_times = []
+    for event in ds.events:
+        detection_times.append(event.origins[0].time)
+    
+    for i in range(len(detection_times)):
+        # only read file if date of event is different than last event
+        if i == 0 or detection_times[i].date != st[0].stats.starttime.date:
+            st,event_st = load_waveform(r,detection_times[i])
+        else:
+            event_st = st.copy()
+            event_st.trim(starttime=detection_times[i],endtime=detection_times[i] + r.trace_length)
+
+        # rotate the waveform
+        try:
+            event_st.rotate('NE->RT',back_azimuth=r.backazimuths[i])
+            waveform = get_3D_trace(r,event_st)
+            waveform_matrix[i,:] = waveform   
+        except:
+            waveform_matrix[i,:] = np.zeros((3*int(r.trace_length*fs+1)))
+        # give output
+        print(str(i)+"/"+str(len(waveform_matrix))+" event waveforms retrieved...")
+    return waveform_matrix
 
 
 
@@ -235,7 +286,6 @@ def get_stacks(waveforms,detection_dates,correlation_coefficients,cluster,shifts
     for d in range(num_days.days):
         day = start_date + timedelta(days=d)
         waves_today = aligned_cluster_events[detection_dates == day,:]
-        #waves_today = np.divide(waves_today,np.nanmax(np.abs(waves_today),axis=1,keepdims=True))
         daily_stack = np.divide(np.nansum(waves_today,axis = 0),np.sum([detection_dates == day]))
         daily_stacks.append(daily_stack)
     stack = np.nanmean(aligned_cluster_events,axis=0)
@@ -328,7 +378,7 @@ def plot_daily_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_v
     
     
     
-def plot_weekly_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,stacks,colors,baz_bounds,backazimuths):
+def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,stacks,colors,baz_bounds,backazimuths):
     # take care of some timing details we need for plotting
     start_date = detection_times[0].date()
     start_time = datetime(start_date.year,start_date.month,start_date.day)
@@ -340,27 +390,32 @@ def plot_weekly_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_
 
     # make plot
     fig = plt.figure(figsize=(15,15))
-    gs = fig.add_gridspec(nrows=10,ncols=2, hspace=0,height_ratios=[2,0.5,1,1,0.5,1,1,0.5,1,1],width_ratios=[1,0.1])
+    gs = fig.add_gridspec(nrows=10,ncols=2, hspace=0,height_ratios=[2,0.6,1,1,0.6,1,1,0.6,1,1],width_ratios=[1,0.1])
     ax = gs.subplots(sharex=False,sharey=False)
     
     # plot gps ice velocity
-    ax[0,0].plot(gps_time_vect,gps_velocity, c = 'k')
-    ax[0,0].set_ylabel("Velocity (m/year)")
+    ax[0,0].plot(gps_time_vect,gps_speed, c = 'k')
+    ax[0,0].set_ylabel("Speed (m/year)",fontsize=15)
     ax[0,0].set_ylim(3800,4050)
     ax[0,0].set_yticks([3850,3900,3950,4000])
     ax[0,0].xaxis.set_tick_params(which='both', labelbottom=True)
     ax[0,0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
-    ax[0,0].set_title("a",loc="left",fontsize=25)
-    
+    ax[0,0].set_title("a. GPS ice speed and timeseries of noise RMS",loc="left",fontsize=15)
+
     # plot rms noise level                       
     ax_twin = ax[0,0].twinx()
     ax_twin.spines.right.set_position(("axes",1))
     ax_twin.set_yticks([0,2e-6,4e-6,6e-6,8e-6])
-    ax_twin.set_yticklabels(['0','2','4','6','8'],c='grey')
+    ax_twin.set_yticklabels(['0','2','4','6','8'])
     ax_twin.set_ylim(0,12e-6)
-    ax_twin.set_ylabel("\n  Noise RMS \n($10^{-6}$ m/s)",c="grey")
-    ax_twin.plot(noise_date_vect,noise_vect,linewidth="0.75",c='silver')
-
+    ax_twin.set_ylabel("\n  Noise RMS \n($10^{-6}$ m/s)",fontsize=15)
+    ax_twin.bar(noise_date_vect,noise_vect,width=7,facecolor='silver',edgecolor='k')
+    
+    # add lines for important days and label them
+    ax_twin.vlines([datetime(2012,5,9),datetime(2013,11,7)],0,120,colors=['dimgray','dimgray'],linestyles='dashed')
+    ax_twin.text(datetime(2012,5,15),3e-6,"May 9 riftquake")
+    ax_twin.text(datetime(2013,8,25),3e-6,"Iceberg B-31 \ncalves")
+    
     # make spacing subplot invisible
     ax[1,0].set_visible(0)
     ax[0,1].set_visible(0)
@@ -368,18 +423,17 @@ def plot_weekly_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_
 
     # plot event timeseries
     ax_ind = [2,5,8]
-    letters = ['b','c','d']
+    letters = ['b. Timeseries and waveforms of rift tip events','c. Timeseries and waveforms of rift/margin events','d. Timeseries and waveforms of northeast margin events']
     for i in range(len(baz_bounds)):
         bool_indices = np.logical_and(backazimuths>=baz_bounds[i][0],backazimuths<baz_bounds[i][1])
         baz_group_times = detection_times[bool_indices]
-        ax[ax_ind[i],0].hist(baz_group_times,binedges,facecolor=colors[i])
+        ax[ax_ind[i],0].hist(baz_group_times,binedges,facecolor=colors[i],edgecolor='k')
         ax[ax_ind[i],0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
-        ax[ax_ind[i],0].set_ylabel("Events per day")
+        ax[ax_ind[i],0].set_ylabel("Events",fontsize=15)
         ax[ax_ind[i],0].set_ylim(0,120)
-        ax[ax_ind[i],0].spines['right'].set_visible(False)
-        ax[ax_ind[i],0].spines['top'].set_visible(False)    
-        ax[ax_ind[i],0].set_title(letters[i],loc="left",fontsize=25)
-
+        ax[ax_ind[i],0].set_title(letters[i],loc="left",fontsize=15)
+        ax[ax_ind[i],0].vlines([datetime(2012,5,9),datetime(2013,11,7)],0,120,colors=['dimgray','dimgray'],linestyles='dashed')
+        
         # normalize the stacks for plotting
         trim_daily_stacks = np.array(daily_stacks[i])[:,200:515]
         norm_daily_stacks = np.divide(trim_daily_stacks,np.amax(np.abs(trim_daily_stacks),axis=1,keepdims=True))
@@ -389,12 +443,12 @@ def plot_weekly_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_
         ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.25,vmax=0.25,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
         ax[ax_ind[i]+1,0].set_yticks([0,trace_length/2,trace_length])
         ax[ax_ind[i]+1,0].set_yticklabels(['150','75','0'])
-        ax[ax_ind[i]+1,0].set_ylabel("Time (s)")
+        ax[ax_ind[i]+1,0].set_ylabel("Time (s)",fontsize=15)
         ax[ax_ind[i]+1,0].xaxis.set_tick_params(which='both', labelbottom=True)
         ax[ax_ind[i]+1,0].xaxis_date()
 
         # plot individual overall stacks on right axis
-        ax[ax_ind[i]+1,1].plot(stacks[i][200:515],np.flip(np.arange(315)))
+        ax[ax_ind[i]+1,1].plot(stacks[i][200:515],np.flip(np.arange(315)),c='k')
         box = ax[ax_ind[i]+1,0].get_position()
         box.x0 = box.x0 + 0.65
         box.x1 = box.x0 + 0.05

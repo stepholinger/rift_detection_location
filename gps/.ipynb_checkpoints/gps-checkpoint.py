@@ -7,7 +7,7 @@ from sklearn.neighbors import KernelDensity
 
 
 
-def gps_ice_velocity(station,peak_height,kde_width):
+def gps_ice_speed(station,peak_height,kde_width):
     home_dir = str(pathlib.Path().absolute())
     data = pd.read_csv(home_dir+"/data/gps/" + station + "_5minavg_neu.txt",names=["seconds","days","n","e","u","lat","lon","alt"],delim_whitespace=True)
 
@@ -28,10 +28,10 @@ def gps_ice_velocity(station,peak_height,kde_width):
             daily_dist = []
             date_vect.append(time_vect[t].date())
 
-    vel = np.gradient(daily_dist_vect,86400) 
-    vel = remove_artifacts(vel,peak_height,kde_width)
+    speed = np.gradient(daily_dist_vect,86400) 
+    speed = remove_artifacts(speed,peak_height,kde_width)
     
-    return vel,date_vect
+    return speed,date_vect
 
 
 
