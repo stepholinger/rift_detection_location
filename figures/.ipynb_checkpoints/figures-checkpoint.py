@@ -217,24 +217,19 @@ def get_3D_trace(r,event):
 
 
 
-def get_rotated_waveforms(ds,r):
+def get_rotated_waveforms(r):
 
     # make output array
     fs = r.freq[1]*2.1
-    waveform_matrix = np.zeros((len(ds.events),3*int(r.trace_length*fs+1)))
+    waveform_matrix = np.zeros((len(r.detection_times),3*int(r.trace_length*fs+1)))
     
-    # extract times for each event in the dataset
-    detection_times = []
-    for event in ds.events:
-        detection_times.append(event.origins[0].time)
-    
-    for i in range(len(detection_times)):
+    for i in range(len(r.detection_times)):
         # only read file if date of event is different than last event
-        if i == 0 or detection_times[i].date != st[0].stats.starttime.date:
-            st,event_st = load_waveform(r,detection_times[i])
+        if i == 0 or r.detection_times[i].date != st[0].stats.starttime.date:
+            st,event_st = load_waveform(r,r.detection_times[i])
         else:
             event_st = st.copy()
-            event_st.trim(starttime=detection_times[i],endtime=detection_times[i] + r.trace_length)
+            event_st.trim(starttime=r.detection_times[i],endtime=r.detection_times[i] + r.trace_length)
 
         # rotate the waveform
         try:
@@ -435,12 +430,12 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
         ax[ax_ind[i],0].vlines([datetime(2012,5,9),datetime(2013,11,7)],0,120,colors=['dimgray','dimgray'],linestyles='dashed')
         
         # normalize the stacks for plotting
-        trim_daily_stacks = np.array(daily_stacks[i])[:,200:515]
+        trim_daily_stacks = np.array(daily_stacks[i])[:,0,200:515]
         norm_daily_stacks = np.divide(trim_daily_stacks,np.amax(np.abs(trim_daily_stacks),axis=1,keepdims=True))
         norm_daily_stacks = np.transpose(norm_daily_stacks)
         
         # plot waveforms and configure labels
-        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.25,vmax=0.25,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
+        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.5,vmax=0.5,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
         ax[ax_ind[i]+1,0].set_yticks([0,trace_length/2,trace_length])
         ax[ax_ind[i]+1,0].set_yticklabels(['150','75','0'])
         ax[ax_ind[i]+1,0].set_ylabel("Time (s)",fontsize=15)
@@ -448,7 +443,7 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
         ax[ax_ind[i]+1,0].xaxis_date()
 
         # plot individual overall stacks on right axis
-        ax[ax_ind[i]+1,1].plot(stacks[i][200:515],np.flip(np.arange(315)),c='k')
+        ax[ax_ind[i]+1,1].plot(stacks[i][0,200:515],np.flip(np.arange(315)),c='k')
         box = ax[ax_ind[i]+1,0].get_position()
         box.x0 = box.x0 + 0.65
         box.x1 = box.x0 + 0.05
