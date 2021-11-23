@@ -460,3 +460,6 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
 
     plt.savefig("outputs/figures/gps_and_weekly_event_timeseries.png")
     #plt.show()
+    
+    
+    

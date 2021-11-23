@@ -23,9 +23,9 @@ def get_files(l):
     files = glob.glob(l.data_path + "PIG2/" + "HHZ" + "/*", recursive=True)
     files = [f.replace("HHZ","HH*") for f in files]
     files.sort()
-    start_date = l.detection_times[0].strftime("%Y-%m-%d")
+    start_date = l.detection_times[0].strftime("__%Y%m%dT000000Z__")
     start_index = [s for s in range(len(files)) if start_date in files[s]][0]
-    end_date = l.detection_times[-1].strftime("%Y-%m-%d")
+    end_date = l.detection_times[-1].strftime("__%Y%m%dT000000Z__")
     end_index = [s for s in range(len(files)) if end_date in files[s]][0]+1
     files = files[start_index:end_index]
     return files
@@ -33,7 +33,7 @@ def get_files(l):
 
 
 def get_detections_today(l):
-    current_date = datetime.strptime(l.f.split("/")[9].split(".")[0],"%Y-%m-%d")
+    current_date = datetime.strptime(l.f.split("__")[1].split("T")[0],"%Y%m%d")
     bool_indices = np.logical_and(l.detection_times>=current_date,l.detection_times<current_date + timedelta(days=1))
     detections_today = l.detection_times[bool_indices]
     if sum(bool_indices) == 0:
@@ -46,10 +46,14 @@ def get_detections_today(l):
     
 def load_waveform(r,detection_time):
     # read in data for template
-    date_string = detection_time.date().strftime("%Y-%m-%d")
+    date_string = detection_time.date().strftime("__%Y%m%dT000000Z__")
     fname = r.data_path + r.station + "/HH*/*" + date_string + "*"
     st = obspy.read(fname)
 
+    # remove instrumental response to acceleration
+    inv = obspy.read_inventory(r.xml_path + "/*")
+    st.remove_response(inventory=inv,output="ACC")
+    
     # basic preprocessing
     st.detrend("demean")
     st.detrend("linear")
@@ -58,6 +62,11 @@ def load_waveform(r,detection_time):
     # filter and resample the data to each band
     st.filter("bandpass",freqmin=r.freq[0],freqmax=r.freq[1])
     st.resample(r.freq[1]*2.1)
+    
+    # convert to tilt
+    for tr in st:
+        tr.data = tr.data/-9.8
+    
     return st
 
 
@@ -101,7 +110,7 @@ def rotate_waveforms(r):
 
 
 
-def get_rotated_waveforms(r): 
+def get_rotated_tilt_waveforms(r): 
     
     # make output array
     r.fs = r.freq[1]*2.1
@@ -127,84 +136,28 @@ def get_rotated_waveforms(r):
 
 
 
-def get_stacks(waveforms_stack,waveforms_corr,detection_dates,correlation_coefficients,cluster,shifts,freq,trace_length):    
+def get_tilt_stack(waveforms_stack,waveforms_corr,correlation_coefficients,cluster,shifts,freq,trace_length):    
     
     # identify "master event" which will be the event from that was best correlated with the cluster centroid earlier
     master_event = waveforms_corr[np.argmax(np.abs(correlation_coefficients))]
-
-    # make empty array for storage
-    fs = freq[1]*2.1
-    aligned_cluster_events = np.zeros((len(waveforms_stack),3,int(trace_length*fs+1)))
-
-    # iterate through all waves in the current cluster
-    for w in range(len(waveforms_stack)):
-
-        # cross correlate and align each component of the trace w.r.t the master event
-        for i in range(3):
-            
-            # put both waveforms into an obspy stream
-            master_trace = obspy.Trace(master_event[i])
-            trace = obspy.Trace(waveforms_corr[w][i])
-
-            # cross correlate with master event
-            correlation_timeseries = correlate(master_trace,trace,500)
-            shift, correlation_coefficient = xcorr_max(correlation_timeseries)
-
-            # get waveform from stacking frequency band
-            trace = waveforms_stack[w][i]
-            
-            # flip polarity if necessary
-            if correlation_coefficient < 0:
-                trace = trace * -1
-
-            if shift > 0:
-                aligned_trace = np.append(np.zeros(abs(int(shift))),trace)
-                aligned_trace = aligned_trace[:int(trace_length*fs+1)]
-                aligned_cluster_events[w,i,:len(aligned_trace)] = aligned_trace
-
-            else:
-                aligned_trace = trace[abs(int(shift)):]
-                aligned_cluster_events[w,i,:len(aligned_trace)] = aligned_trace
-
-    start_date = detection_dates[0]
-    end_date = detection_dates[-1]
-    num_days = end_date-start_date
-
-    daily_stacks = []
-    for d in range(num_days.days):
-        day = start_date + timedelta(days=d)
-        waves_today = aligned_cluster_events[detection_dates == day,:,:]
-        daily_stack = np.divide(np.nansum(waves_today,axis = 0),np.sum([detection_dates == day]))
-        daily_stacks.append(daily_stack)
-    stack = np.nanmean(aligned_cluster_events,axis=0)
-    return daily_stacks,stack
-    
-    
-    
-def get_radial_tilt_stack(waveforms_stack,waveforms_corr,correlation_coefficients,cluster,shifts,freq,trace_length):    
-    
-    # identify "master event" which will be the event from that was best correlated with the cluster centroid earlier
-    master_event = waveforms_corr[np.argmax(np.abs(correlation_coefficients))]
-    master_event_tilt = np.gradient(master_event[1],1/2.1)/(9.8)
-    master_trace = obspy.Trace(master_event_tilt)
+    master_trace = obspy.Trace(master_event[1])
 
     # make empty array for storage
     fs = freq[1]*2.1
     aligned_cluster_events = np.zeros((len(waveforms_stack),int(trace_length*fs+1)))
-    
+
     # iterate through all waves in the current cluster
     for w in range(len(waveforms_stack)):
 
         # cross correlate and align each component of the trace w.r.t the master event
-        event_tilt = np.gradient(waveforms_corr[w][1],1/2.1)/(9.8)
-        trace = obspy.Trace(event_tilt)
+        trace = obspy.Trace(waveforms_corr[w][1])
 
         # cross correlate with master event
         correlation_timeseries = correlate(master_trace,trace,500)
         shift, correlation_coefficient = xcorr_max(correlation_timeseries)
 
         # get waveform from stacking frequency band
-        trace = np.gradient(waveforms_stack[w][1],1/2.1)/(9.8)
+        trace = waveforms_stack[w][1]
 
         # flip polarity if necessary
         if correlation_coefficient < 0:

@@ -180,3 +180,46 @@ def get_stacks(waveforms_stack,waveforms_corr,detection_dates,correlation_coeffi
     return daily_stacks,stack
     
     
+    
+def get_radial_tilt_stack(waveforms_stack,waveforms_corr,correlation_coefficients,cluster,shifts,freq,trace_length):    
+    
+    # identify "master event" which will be the event from that was best correlated with the cluster centroid earlier
+    master_event = waveforms_corr[np.argmax(np.abs(correlation_coefficients))]
+    master_event_tilt = np.gradient(master_event[1],1/2.1)/(9.8)
+    master_trace = obspy.Trace(master_event_tilt)
+
+    # make empty array for storage
+    fs = freq[1]*2.1
+    aligned_cluster_events = np.zeros((len(waveforms_stack),int(trace_length*fs+1)))
+    
+    # iterate through all waves in the current cluster
+    for w in range(len(waveforms_stack)):
+
+        # cross correlate and align each component of the trace w.r.t the master event
+        event_tilt = np.gradient(waveforms_corr[w][1],1/2.1)/(9.8)
+        trace = obspy.Trace(event_tilt)
+
+        # cross correlate with master event
+        correlation_timeseries = correlate(master_trace,trace,500)
+        shift, correlation_coefficient = xcorr_max(correlation_timeseries)
+
+        # get waveform from stacking frequency band
+        trace = np.gradient(waveforms_stack[w][1],1/2.1)/(9.8)
+
+        # flip polarity if necessary
+        if correlation_coefficient < 0:
+            trace = trace * -1
+
+        if shift > 0:
+            aligned_trace = np.append(np.zeros(abs(int(shift))),trace)
+            aligned_trace = aligned_trace[:int(trace_length*fs+1)]
+            aligned_cluster_events[w,:len(aligned_trace)] = aligned_trace
+
+        else:
+            aligned_trace = trace[abs(int(shift)):]
+            aligned_cluster_events[w,:len(aligned_trace)] = aligned_trace
+
+    stack = np.nanmean(aligned_cluster_events,axis=0)
+    return stack
+    
+    
