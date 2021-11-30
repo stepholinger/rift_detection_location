@@ -435,7 +435,7 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
         norm_daily_stacks = np.transpose(norm_daily_stacks)
         
         # plot waveforms and configure labels
-        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.5,vmax=0.5,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
+        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.6,vmax=0.6,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
         ax[ax_ind[i]+1,0].set_yticks([0,trace_length/2,trace_length])
         ax[ax_ind[i]+1,0].set_yticklabels(['150','75','0'])
         ax[ax_ind[i]+1,0].set_ylabel("Time (s)",fontsize=15)
@@ -460,3 +460,6 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
 
     plt.savefig("outputs/figures/gps_and_weekly_event_timeseries.png")
     #plt.show()
+    
+    
+    

@@ -136,6 +136,7 @@ def get_stacks(waveforms_stack,waveforms_corr,detection_dates,correlation_coeffi
     fs = freq[1]*2.1
     aligned_cluster_events = np.zeros((len(waveforms_stack),3,int(trace_length*fs+1)))
 
+    #polarity_count = 0
     # iterate through all waves in the current cluster
     for w in range(len(waveforms_stack)):
 
@@ -155,6 +156,7 @@ def get_stacks(waveforms_stack,waveforms_corr,detection_dates,correlation_coeffi
             
             # flip polarity if necessary
             if correlation_coefficient < 0:
+                #polarity_count += 1/3
                 trace = trace * -1
 
             if shift > 0:
@@ -177,6 +179,7 @@ def get_stacks(waveforms_stack,waveforms_corr,detection_dates,correlation_coeffi
         daily_stack = np.divide(np.nansum(waves_today,axis = 0),np.sum([detection_dates == day]))
         daily_stacks.append(daily_stack)
     stack = np.nanmean(aligned_cluster_events,axis=0)
+    #print(polarity_count/len(waveforms_stack))
     return daily_stacks,stack
     
     
