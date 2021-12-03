@@ -18,6 +18,10 @@ import cartopy
 import cartopy.crs as ccrs
 from shapely import geometry
 from collections import namedtuple
+from scipy.fft import fft, ifft, fftfreq
+from scipy.integrate import cumtrapz
+from scipy.signal import gaussian, tukey
+
 
 
 def transform_imagery(file,dst_crs):
@@ -288,91 +292,6 @@ def get_stacks(waveforms,detection_dates,correlation_coefficients,cluster,shifts
     
     
     
-def plot_daily_events_and_gps(gps_velocity,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,stacks,colors,baz_bounds,backazimuths):
-    # take care of some timing details we need for plotting
-    start_date = detection_times[0].date()
-    start_time = datetime(start_date.year,start_date.month,start_date.day)
-    end_date = detection_times[-1].date()
-    end_time = datetime(end_date.year,end_date.month,end_date.day)+timedelta(days=1)
-    binedges = [start_time + timedelta(days=x) for x in range(0,(end_time-start_time).days+1,1)]
-    num_days = (end_time-start_time).days                          
-    trace_length = len(daily_stacks[0][0,:])
-
-    # make plot
-    fig = plt.figure(figsize=(15,15))
-    gs = fig.add_gridspec(nrows=10,ncols=2, hspace=0,height_ratios=[2,0.5,1,1,0.5,1,1,0.5,1,1],width_ratios=[1,0.1])
-    ax = gs.subplots(sharex=False,sharey=False)
-    
-    # plot gps ice velocity
-    ax[0,0].plot(gps_time_vect,gps_velocity, c = 'k')
-    ax[0,0].set_ylabel("Velocity (m/year)")
-    ax[0,0].set_ylim(3800,4050)
-    ax[0,0].set_yticks([3850,3900,3950,4000])
-    ax[0,0].xaxis.set_tick_params(which='both', labelbottom=True)
-    ax[0,0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
-    ax[0,0].set_title("a",loc="left",fontsize=25)
-
-    # plot rms noise level                       
-    ax_twin = ax[0,0].twinx()
-    ax_twin.spines.right.set_position(("axes",1))
-    ax_twin.set_yticks([0,2e-6,4e-6,6e-6,8e-6])
-    ax_twin.set_yticklabels(['0','2','4','6','8'],c='grey')
-    ax_twin.set_ylim(0,12e-6)
-    ax_twin.set_ylabel("\n  Noise RMS \n($10^{-6}$ m/s)",c="grey")
-    ax_twin.plot(noise_date_vect,noise_vect,linewidth="0.75",c='silver')
-
-    # make spacing subplot invisible
-    ax[1,0].set_visible(0)
-    ax[0,1].set_visible(0)
-    ax[1,1].set_visible(0)
-
-    # plot event timeseries
-    ax_ind = [2,5,8]
-    letters = ['b','c','d']
-    for i in range(len(baz_bounds)):
-        bool_indices = np.logical_and(backazimuths>=baz_bounds[i][0],backazimuths<baz_bounds[i][1])
-        baz_group_times = detection_times[bool_indices]
-        ax[ax_ind[i],0].hist(baz_group_times,binedges,facecolor=colors[i])
-        ax[ax_ind[i],0].set_ylabel("Events per day")
-        ax[ax_ind[i],0].set_ylim(0,40)
-        ax[ax_ind[i],0].spines['right'].set_visible(False)
-        ax[ax_ind[i],0].spines['top'].set_visible(False)    
-        ax[ax_ind[i],0].set_title(letters[i],loc="left",fontsize=25)
-
-        # normalize the stacks for plotting
-        trim_daily_stacks = np.array(daily_stacks[i])[:,200:515]
-        norm_daily_stacks = np.divide(trim_daily_stacks,np.amax(np.abs(trim_daily_stacks),axis=1,keepdims=True))
-        norm_daily_stacks = np.transpose(norm_daily_stacks)
-        
-        # plot waveforms and configure labels
-        ax[ax_ind[i]+1,0].imshow(norm_daily_stacks,vmin=-0.25,vmax=0.25,aspect = 'auto',extent=[date2num(start_time),date2num(end_time),0,trace_length],cmap='seismic')
-        ax[ax_ind[i]+1,0].set_yticks([0,trace_length/2,trace_length])
-        ax[ax_ind[i]+1,0].set_yticklabels(['150','75','0'])
-        ax[ax_ind[i]+1,0].set_ylabel("Time (s)")
-        ax[ax_ind[i]+1,0].xaxis.set_tick_params(which='both', labelbottom=True)
-        ax[ax_ind[i]+1,0].xaxis_date()
-
-        # plot individual overall stacks on right axis
-        ax[ax_ind[i]+1,1].plot(stacks[i][200:515],np.flip(np.arange(315)))
-        box = ax[ax_ind[i]+1,0].get_position()
-        box.x0 = box.x0 + 0.65
-        box.x1 = box.x0 + 0.05
-        ax[ax_ind[i]+1,1].set_position(box)
-        ax[ax_ind[i]+1,1].axis('off')
-
-        # make spacing subplots invisible
-        ax[ax_ind[i],1].set_visible(0)
-        if ax_ind[i]<8:
-            ax[ax_ind[i]+2,1].set_visible(0)
-            ax[ax_ind[i]+2,0].set_visible(0)
-            
-    ax[9,0].set_xlabel("Date")
-
-    plt.savefig("outputs/figures/gps_and_daily_event_timeseries.png")
-    #plt.show()
-    
-    
-    
 def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vect,detection_times,daily_stacks,stacks,colors,baz_bounds,backazimuths):
     # take care of some timing details we need for plotting
     start_date = detection_times[0].date()
@@ -463,3 +382,95 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
     
     
     
+def deconvolve(g,z):
+    gf = fft(g)
+    zf = fft(z)
+    answer = ifft(zf/gf)
+    return answer
+
+
+    
+def deconvolve_and_plot(stack_ds,gf_ds,dt,source_region):
+    fig,ax = plt.subplots(3,3,figsize=(30,10),gridspec_kw={'width_ratios': [4,4,5],'height_ratios': [5,1,5]})
+    t = np.arange(0,500,dt)
+    
+    # get the stack and green's functions from file, taper the stack, then deconvolve both green's functions
+    z = np.array(stack_ds[source_region+"_stack"])[0].flatten()
+    z = cumtrapz(z,dx=dt)
+    win = tukey(1050,0.6)
+    z = win*z
+    gf_moment = np.array(gf_ds["/"+source_region+"/moment/g"]).flatten()
+    stf_moment = deconvolve(gf_moment,z)
+    gf_force = np.array(gf_ds["/"+source_region+"/force/g"]).flatten()
+    stf_force = deconvolve(gf_force,z)
+
+    # plot moment gf
+    ax[0][0].plot(t,gf_moment,color='k',linewidth=3)
+    ax[0][0].set_title("     a. Moment Green's function",fontsize=30)
+    ax[0][0].set_ylabel("Moment$^{-1}$seconds$^{-1}$ $(\dfrac{N*m}{m^2}*s)^{-1}$ ",fontsize=20)
+    ax[0][0].set_xlim((0,500))
+    ax[0][0].tick_params(axis='x',labelsize=20)
+    ax[0][0].tick_params(axis='y',labelsize=20)
+    ax[0][0].yaxis.offsetText.set_fontsize(20)
+
+    # plot moment stf
+    ax[0][1].plot(t[:130],np.real(stf_moment[150:280]-stf_moment[150]),color='k',linewidth=3)
+    ax[0][1].set_title("     b. Moment source time function",fontsize=30)
+    ax[0][1].set_ylabel("Moment $(\dfrac{N*m}{m^2})$",fontsize=20)
+    ax[0][1].set_xlim((0,50))
+    ax[0][1].tick_params(axis='x',labelsize=20)
+    ax[0][1].tick_params(axis='y',labelsize=20)
+    ax[0][1].yaxis.offsetText.set_fontsize(20)
+
+    # plot force gf
+    ax[2][0].plot(t,gf_force*1000,color='k',linewidth=3)
+    ax[2][0].set_title("  c. Pressure Green's function",fontsize=30)
+    ax[2][0].set_ylabel("Pressure$^{-1}$seconds$^{-1}$ $(kPa*s)^{-1}$",fontsize=20)
+    ax[2][0].set_xlabel("Time (s)",fontsize=20)
+    ax[2][0].set_xlim((0,500))
+    ax[2][0].tick_params(axis='x',labelsize=20)
+    ax[2][0].tick_params(axis='y',labelsize=20)
+    ax[2][0].yaxis.offsetText.set_fontsize(20)
+
+    # add convolution operator and equal sign to plot
+    ax[1][0].set_visible(0)
+    ax_twin = ax[1][0].twinx()
+    ax_twin.set_yticks([])
+    ax_twin.xaxis.set_visible(False)
+    plt.setp(ax_twin.spines.values(), visible=False)
+    ax_twin.set_ylabel("*",fontsize=80,rotation=0)
+    ax_twin.yaxis.set_label_coords(1.175,1)
+    ax[1][1].set_visible(0)
+    ax_twin = ax[1][1].twinx()
+    ax_twin.set_yticks([])
+    ax_twin.xaxis.set_visible(False)
+    plt.setp(ax_twin.spines.values(), visible=False)
+    ax_twin.set_ylabel("=",fontsize=80,rotation=0)
+    ax_twin.yaxis.set_label_coords(1.05,1) 
+
+    # plot force stf
+    ax[2][1].plot(t[:130],np.real(stf_force[150:280]-stf_force[150])/1000,color='k',linewidth=3)
+    ax[2][1].set_title("d. Pressure source time function",fontsize=30)
+    ax[2][1].set_ylabel("Pressure (kPa)",fontsize=20)
+    ax[2][1].set_xlabel("Time (s)",fontsize=20)
+    ax[2][1].set_xlim((0,50))
+    ax[2][1].tick_params(axis='x',labelsize=20)
+    ax[2][1].tick_params(axis='y',labelsize=20)
+    
+    gs = ax[1, 2].get_gridspec()
+    # remove the underlying axes
+    for axis in ax[:, -1]:
+        axis.remove()
+    ax_big = fig.add_subplot(gs[:, -1])
+
+    # plot stack
+    ax_big.plot(t[:600],z[150:750],color="#d95f02",linewidth=3)
+    ax_big.set_xlim((0,250))
+    ax_big.set_title("e. Rift tip stack",fontsize=30)
+    ax_big.set_ylabel("Displacement (m)",fontsize=20)
+    ax_big.set_xlabel("Time (s)",fontsize=20)
+    ax_big.tick_params(axis='x',labelsize=20)
+    ax_big.tick_params(axis='y',labelsize=20)
+    ax_big.yaxis.offsetText.set_fontsize(20)
+    plt.tight_layout()
+    plt.savefig("outputs/figures/deconvolution.png",dpi=60)
