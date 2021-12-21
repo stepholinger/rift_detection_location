@@ -20,7 +20,9 @@ from shapely import geometry
 from collections import namedtuple
 from scipy.fft import fft, ifft, fftfreq
 from scipy.integrate import cumtrapz
-from scipy.signal import gaussian, tukey
+from scipy.signal import gaussian, tukey, butter, filtfilt
+from scipy.special import erf
+from obspy.signal.cross_correlation import correlate, xcorr_max
 
 
 
@@ -157,11 +159,11 @@ def plot_backazimuths_on_imagery(backazimuths,array_centroid,station_grid_coords
     
     # add legend for spatial groups
     x,y = transform(p1,p2,-102.75,-75.175)
-    box = matplotlib.patches.Rectangle((x-1000, y-7000), 27000, 10000, linewidth=1, edgecolor='k', facecolor='w')
+    box = matplotlib.patches.Rectangle((x-1000, y-7000), 20000, 10000, linewidth=1, edgecolor='k', facecolor='w')
     ax_stats.add_patch(box)
     ax_stats.text(x, y, "Rift tip",c="#d95f02",fontsize=25)
     ax_stats.text(x, y-3000, "Rift/margin",c="#1b9e77",fontsize=25)
-    ax_stats.text(x, y-6000, "Northeast margin",c="#7570b3",fontsize=25)
+    ax_stats.text(x, y-6000, "Shear margin",c="#7570b3",fontsize=25)
    
     # add North arrow
     line_x,line_y = transform(p1,p2,np.linspace(-102.2,-102.2,100),np.linspace(-74.65,-74.6,100))
@@ -307,11 +309,11 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
     gs = fig.add_gridspec(nrows=10,ncols=2, hspace=0,height_ratios=[2,0.6,1,1,0.6,1,1,0.6,1,1],width_ratios=[1,0.1])
     ax = gs.subplots(sharex=False,sharey=False)
     
-    # plot gps ice velocity
-    ax[0,0].plot(gps_time_vect,gps_speed, c = 'k')
-    ax[0,0].set_ylabel("Speed (m/year)",fontsize=15)
-    ax[0,0].set_ylim(3800,4050)
-    ax[0,0].set_yticks([3850,3900,3950,4000])
+    # plot gps ice velocity in m/day
+    ax[0,0].plot(gps_time_vect,gps_speed/365, c = 'k')
+    ax[0,0].set_ylabel("Speed (m/day)",fontsize=15)
+    ax[0,0].set_ylim(10.4,11.1)
+    ax[0,0].set_yticks([10.4,10.6,10.6,10.8,11])
     ax[0,0].xaxis.set_tick_params(which='both', labelbottom=True)
     ax[0,0].set_xlim(gps_time_vect[0],gps_time_vect[-1])
     ax[0,0].set_title("a. GPS ice speed and timeseries of noise RMS",loc="left",fontsize=15)
@@ -326,10 +328,11 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
     ax_twin.bar(noise_date_vect,noise_vect,width=7,facecolor='silver',edgecolor='k')
     
     # add lines for important days and label them
-    ax_twin.vlines([datetime(2012,5,9),datetime(2013,11,7)],0,120,colors=['dimgray','dimgray'],linestyles='dashed')
+    ax_twin.vlines([datetime(2012,5,9),datetime(2013,7,1),datetime(2013,11,7)],0,120,colors=['dimgray','dimgray'],linestyles='dashed')
     ax_twin.text(datetime(2012,5,15),3e-6,"May 9 riftquake")
     ax_twin.text(datetime(2013,8,25),3e-6,"Iceberg B-31 \ncalves")
-    
+    ax_twin.text(datetime(2013,4,28),8e-6,"July 2013 \npreliminary \ncalving")
+
     # make spacing subplot invisible
     ax[1,0].set_visible(0)
     ax[0,1].set_visible(0)
@@ -337,7 +340,7 @@ def plot_weekly_events_and_gps(gps_speed,gps_time_vect,noise_vect,noise_date_vec
 
     # plot event timeseries
     ax_ind = [2,5,8]
-    letters = ['b. Timeseries and waveforms of rift tip events','c. Timeseries and waveforms of rift/margin events','d. Timeseries and waveforms of northeast margin events']
+    letters = ['b. Timeseries and waveforms of rift tip events','c. Timeseries and waveforms of rift/margin events','d. Timeseries and waveforms of shear margin events']
     for i in range(len(baz_bounds)):
         bool_indices = np.logical_and(backazimuths>=baz_bounds[i][0],backazimuths<baz_bounds[i][1])
         baz_group_times = detection_times[bool_indices]
@@ -389,35 +392,50 @@ def deconvolve(g,z):
     return answer
 
 
+
+def convolve(g,s):
+    gf = fft(g)
+    s = fft(s)
+    answer = ifft(s*gf)
+    return answer
+
+
     
-def deconvolve_and_plot(stack_ds,gf_ds,dt,source_region):
+def deconvolve_and_plot(stack_ds,gf_ds,dt,source_region,label,color,window):
     fig,ax = plt.subplots(3,3,figsize=(30,10),gridspec_kw={'width_ratios': [4,4,5],'height_ratios': [5,1,5]})
-    t = np.arange(0,500,dt)
+    t = np.arange(0,1000,dt)
     
     # get the stack and green's functions from file, taper the stack, then deconvolve both green's functions
-    z = np.array(stack_ds[source_region+"_stack"])[0].flatten()
+    z = np.array(stack_ds[source_region+"_stack"]).flatten()   
     z = cumtrapz(z,dx=dt)
-    win = tukey(1050,0.6)
+    
+    # window data
+    win = tukey(len(z),0.2)
     z = win*z
+    
+    # deconvolve moment green's function from stack
     gf_moment = np.array(gf_ds["/"+source_region+"/moment/g"]).flatten()
     stf_moment = deconvolve(gf_moment,z)
+    
+    # deconvolve  force green's function from stack
     gf_force = np.array(gf_ds["/"+source_region+"/force/g"]).flatten()
     stf_force = deconvolve(gf_force,z)
 
     # plot moment gf
     ax[0][0].plot(t,gf_moment,color='k',linewidth=3)
     ax[0][0].set_title("     a. Moment Green's function",fontsize=30)
-    ax[0][0].set_ylabel("Moment$^{-1}$seconds$^{-1}$ $(\dfrac{N*m}{m^2}*s)^{-1}$ ",fontsize=20)
-    ax[0][0].set_xlim((0,500))
+    ax[0][0].set_ylabel("Moment$^{-1}$seconds$^{-1}$" "\n" "$(\dfrac{N*m}{m^2}*s)^{-1}$ ",fontsize=20)
+    #ax[0][0].set_xlim((0,1000))
     ax[0][0].tick_params(axis='x',labelsize=20)
     ax[0][0].tick_params(axis='y',labelsize=20)
     ax[0][0].yaxis.offsetText.set_fontsize(20)
 
     # plot moment stf
-    ax[0][1].plot(t[:130],np.real(stf_moment[150:280]-stf_moment[150]),color='k',linewidth=3)
+    #ax[0][1].plot(t,stf_moment)
+    ax[0][1].plot(t,np.real(stf_moment),color='k',linewidth=3)
     ax[0][1].set_title("     b. Moment source time function",fontsize=30)
     ax[0][1].set_ylabel("Moment $(\dfrac{N*m}{m^2})$",fontsize=20)
-    ax[0][1].set_xlim((0,50))
+    #ax[0][1].set_xlim((0,50))
     ax[0][1].tick_params(axis='x',labelsize=20)
     ax[0][1].tick_params(axis='y',labelsize=20)
     ax[0][1].yaxis.offsetText.set_fontsize(20)
@@ -425,9 +443,9 @@ def deconvolve_and_plot(stack_ds,gf_ds,dt,source_region):
     # plot force gf
     ax[2][0].plot(t,gf_force*1000,color='k',linewidth=3)
     ax[2][0].set_title("  c. Pressure Green's function",fontsize=30)
-    ax[2][0].set_ylabel("Pressure$^{-1}$seconds$^{-1}$ $(kPa*s)^{-1}$",fontsize=20)
+    ax[2][0].set_ylabel("Pressure$^{-1}$seconds$^{-1}$" "\n" "$(kPa*s)^{-1}$",fontsize=20)
     ax[2][0].set_xlabel("Time (s)",fontsize=20)
-    ax[2][0].set_xlim((0,500))
+    #ax[2][0].set_xlim((0,1000))
     ax[2][0].tick_params(axis='x',labelsize=20)
     ax[2][0].tick_params(axis='y',labelsize=20)
     ax[2][0].yaxis.offsetText.set_fontsize(20)
@@ -449,11 +467,12 @@ def deconvolve_and_plot(stack_ds,gf_ds,dt,source_region):
     ax_twin.yaxis.set_label_coords(1.05,1) 
 
     # plot force stf
-    ax[2][1].plot(t[:130],np.real(stf_force[150:280]-stf_force[150])/1000,color='k',linewidth=3)
+    #ax[2][1].plot(t,np.real(stf_force))
+    ax[2][1].plot(t,np.real(stf_force)/1000,color='k',linewidth=3)
     ax[2][1].set_title("d. Pressure source time function",fontsize=30)
     ax[2][1].set_ylabel("Pressure (kPa)",fontsize=20)
     ax[2][1].set_xlabel("Time (s)",fontsize=20)
-    ax[2][1].set_xlim((0,50))
+    #ax[2][1].set_xlim((0,50))
     ax[2][1].tick_params(axis='x',labelsize=20)
     ax[2][1].tick_params(axis='y',labelsize=20)
     
@@ -464,13 +483,256 @@ def deconvolve_and_plot(stack_ds,gf_ds,dt,source_region):
     ax_big = fig.add_subplot(gs[:, -1])
 
     # plot stack
-    ax_big.plot(t[:600],z[150:750],color="#d95f02",linewidth=3)
-    ax_big.set_xlim((0,250))
-    ax_big.set_title("e. Rift tip stack",fontsize=30)
+    #ax_big.plot(t,z,color=color,linewidth=3)
+    ax_big.plot(t,z,color=color,linewidth=3)
+    #ax_big.set_xlim((0,250))
+    ax_big.set_title("e. "+ label + " stack",fontsize=30)
     ax_big.set_ylabel("Displacement (m)",fontsize=20)
     ax_big.set_xlabel("Time (s)",fontsize=20)
     ax_big.tick_params(axis='x',labelsize=20)
     ax_big.tick_params(axis='y',labelsize=20)
     ax_big.yaxis.offsetText.set_fontsize(20)
     plt.tight_layout()
-    plt.savefig("outputs/figures/deconvolution.png",dpi=60)
+    plt.savefig("outputs/figures/deconvolution_"+source_region+".png",dpi=60)
+    
+    
+     
+def thickness_deconvolution(stack_ds,gf_ds_list,thickness_list,dt,source_region,window):
+    fig,ax = plt.subplots(1,2,figsize=(20,10))
+    t = np.arange(0,500,dt)
+    
+    for gf_ds in gf_ds_list:
+        # get the stack and green's functions from file, taper the stack, then deconvolve both green's functions
+        z = np.array(stack_ds[source_region+"_stack"])[0].flatten()
+        z = cumtrapz(z,dx=dt)
+        win = tukey(1050,0.6)
+        z = win*z
+        gf_moment = np.array(gf_ds["/"+source_region+"/moment/g"]).flatten()
+        stf_moment = deconvolve(gf_moment,z)
+        gf_force = np.array(gf_ds["/"+source_region+"/force/g"]).flatten()
+        stf_force = deconvolve(gf_force,z)
+
+        # plot moment stf
+        ax[0].plot(t[:window[1]-window[0]],np.real(stf_moment[window[0]:window[1]]-stf_moment[window[0]]),linewidth=3)
+        ax[0].set_title("     a. Moment source time function",fontsize=30)
+        ax[0].set_ylabel("Moment $(\dfrac{N*m}{m^2})$",fontsize=20)
+        ax[0].set_xlim((0,t[window[1]-window[0]]))
+        ax[0].tick_params(axis='x',labelsize=20)
+        ax[0].tick_params(axis='y',labelsize=20)
+        ax[0].yaxis.offsetText.set_fontsize(20)
+        
+        # plot force stf
+        ax[1].plot(t[:window[1]-window[0]],np.real(stf_force[window[0]:window[1]]-stf_force[window[0]])/1000,linewidth=3)
+        ax[1].set_title("b. Pressure source time function",fontsize=30)
+        ax[1].set_ylabel("Pressure (kPa)",fontsize=20)
+        ax[1].set_xlabel("Time (s)",fontsize=20)
+        ax[1].set_xlim((0,t[window[1]-window[0]]))
+        ax[1].tick_params(axis='x',labelsize=20)
+        ax[1].tick_params(axis='y',labelsize=20)
+    ax[0].legend(thickness_list)
+    ax[1].legend(thickness_list)
+    plt.savefig("outputs/figures/thickness_deconvolution_"+source_region+".png",dpi=60)
+
+
+    
+def step_convolution(stack_ds,gf_ds,dt,durations,amplitudes,shifts,source_region,label,color):
+    
+    fig,ax = plt.subplots(3,3,figsize=(30,10),gridspec_kw={'width_ratios': [4,4,5],'height_ratios': [5,1,5]})
+    t = np.arange(0,500,dt)
+    
+    # get the stack and green's functions from file, taper the stack, then deconvolve both green's functions
+    z = np.array(stack_ds[source_region+"_stack"])[0].flatten()
+    z = cumtrapz(z,dx=dt)
+    win = tukey(1050,0.6)
+    z = win*z
+    gf_moment = np.array(gf_ds["/"+source_region+"/moment/g"]).flatten()
+    erf_stf_moment = erf(np.linspace(-4,4,durations[0]))
+    stf_moment = np.concatenate((erf_stf_moment,np.ones(1050-len(erf_stf_moment))))*amplitudes[0]
+    modeled_z_moment = convolve(gf_moment,stf_moment)
+    gf_force = np.array(gf_ds["/"+source_region+"/force/g"]).flatten()
+    erf_stf_force = erf(np.linspace(-4,4,durations[1]))
+    stf_force = np.concatenate((erf_stf_force,np.ones(1050-len(erf_stf_force))))*amplitudes[1]
+    modeled_z_force = convolve(gf_force,stf_force)
+
+    # plot moment gf
+    ax[0][0].plot(t,gf_moment,color='k',linewidth=3)
+    ax[0][0].set_title("     a. Moment Green's function",fontsize=30)
+    ax[0][0].set_ylabel("Moment$^{-1}$seconds$^{-1}$" "\n" "$(\dfrac{N*m}{m^2}*s)^{-1}$ ",fontsize=20)
+    ax[0][0].set_xlim((0,500))
+    ax[0][0].tick_params(axis='x',labelsize=20)
+    ax[0][0].tick_params(axis='y',labelsize=20)
+    ax[0][0].yaxis.offsetText.set_fontsize(20)
+
+    # plot moment stf
+    ax[0][1].plot(t,np.real(stf_moment-stf_moment[0]),color='k',linewidth=3)
+    ax[0][1].set_title("     b. Step moment STF",fontsize=30)
+    ax[0][1].set_ylabel("Moment $(\dfrac{N*m}{m^2})$",fontsize=20)
+    ax[0][1].set_xlim((0,durations[0]))
+    ax[0][1].tick_params(axis='x',labelsize=20)
+    ax[0][1].tick_params(axis='y',labelsize=20)
+    ax[0][1].yaxis.offsetText.set_fontsize(20)
+
+    # plot force gf
+    ax[2][0].plot(t,gf_force*1000,color='k',linewidth=3)
+    ax[2][0].set_title("  c. Pressure Green's function",fontsize=30)
+    ax[2][0].set_ylabel("Pressure$^{-1}$seconds$^{-1}$" "\n" "$(kPa*s)^{-1}$",fontsize=20)
+    ax[2][0].set_xlabel("Time (s)",fontsize=20)
+    ax[2][0].set_xlim((0,500))
+    ax[2][0].tick_params(axis='x',labelsize=20)
+    ax[2][0].tick_params(axis='y',labelsize=20)
+    ax[2][0].yaxis.offsetText.set_fontsize(20)
+
+    # plot force stf
+    ax[2][1].plot(t,np.real(stf_force-stf_force[0])/1000,color='k',linewidth=3)
+    ax[2][1].set_title("d. Step pressure STF",fontsize=30)
+    ax[2][1].set_ylabel("Pressure (kPa)",fontsize=20)
+    ax[2][1].set_xlabel("Time (s)",fontsize=20)
+    ax[2][1].set_xlim((0,durations[1]))
+    ax[2][1].tick_params(axis='x',labelsize=20)
+    ax[2][1].tick_params(axis='y',labelsize=20)
+    
+    # add convolution operator and equal sign to plot
+    ax[1][0].set_visible(0)
+    ax_twin = ax[1][0].twinx()
+    ax_twin.set_yticks([])
+    ax_twin.xaxis.set_visible(False)
+    plt.setp(ax_twin.spines.values(), visible=False)
+    ax_twin.set_ylabel("*",fontsize=80,rotation=0)
+    ax_twin.yaxis.set_label_coords(1.175,1)
+    ax[1][1].set_visible(0)
+    ax[1][2].set_visible(0)
+    ax_twin = ax[1][1].twinx()
+    ax_twin.set_yticks([])
+    ax_twin.xaxis.set_visible(False)
+    plt.setp(ax_twin.spines.values(), visible=False)
+    ax_twin.set_ylabel("=",fontsize=80,rotation=0)
+    ax_twin.yaxis.set_label_coords(1.05,1) 
+        
+    # plot stacks and convolution result
+    ax[0][2].plot(t,z,color=color,linewidth=3)
+    ax[0][2].plot(t,np.concatenate((np.zeros(shifts[0]),modeled_z_moment[:-shifts[0]]-modeled_z_moment[0])),color='k',linewidth=3)
+    ax[0][2].set_xlim((50,500))
+    ax[0][2].set_title("c. "+ label + " stack",fontsize=30)
+    ax[0][2].set_ylabel("Displacement (m)",fontsize=20)
+    ax[0][2].set_xlabel("Time (s)",fontsize=20)
+    ax[0][2].tick_params(axis='x',labelsize=20)
+    ax[0][2].tick_params(axis='y',labelsize=20)
+    ax[0][2].yaxis.offsetText.set_fontsize(20)
+    
+    # plot stacks and convolution result
+    ax[2][2].plot(t,z,color=color,linewidth=3)
+    ax[2][2].plot(t,np.concatenate((np.zeros(shifts[1]),modeled_z_force[:-shifts[1]]-modeled_z_force[0])),color='k',linewidth=3)
+    ax[2][2].set_xlim((50,500))
+    ax[2][2].set_title("e. "+ label + " stack",fontsize=30)
+    ax[2][2].set_ylabel("Displacement (m)",fontsize=20)
+    ax[2][2].set_xlabel("Time (s)",fontsize=20)
+    ax[2][2].tick_params(axis='x',labelsize=20)
+    ax[2][2].tick_params(axis='y',labelsize=20)
+    ax[2][2].yaxis.offsetText.set_fontsize(20)
+    plt.tight_layout()
+    plt.savefig("outputs/figures/step_convolution_"+source_region+".png",dpi=60)
+
+    
+    
+def align(master_stf,stf,trace_length):
+    
+    master_stf_trace = obspy.Trace(master_stf)
+    stf_trace = obspy.Trace(stf)
+    #master_stf_trace.detrend("demean")
+    #master_stf_trace.detrend("polynomial",order=3)
+    #stf_trace.detrend("demean")
+    #stf_trace.detrend("polynomial",order=3)
+    
+    # cross correlate with master event
+    correlation_timeseries = correlate(master_stf_trace,stf_trace,1000)
+    shift, correlation_coefficient = xcorr_max(correlation_timeseries)
+
+    # flip polarity if necessary
+    stf = stf_trace.data
+    if correlation_coefficient < 0:
+        stf = stf * -1
+
+    if shift > 0:
+        stf = np.append(np.zeros(abs(int(shift))),stf)
+        aligned_stf = stf[:trace_length]
+
+    else:
+        stf = stf[abs(int(shift)):]
+        aligned_stf = np.append(stf,np.ones(trace_length-len(stf))*stf[-1])
+    return aligned_stf
+    
+    
+def deconvolve_and_stack(waveforms,master_stf_moment,master_stf_force,gf_ds,dt,source_region,label,color,window):
+    fig,ax = plt.subplots(2,2,figsize=(20,10))
+    t = np.arange(0,1000,dt)
+    
+    # read in greens functions
+    gf_moment = np.array(gf_ds["/"+source_region+"/moment/g"]).flatten()
+    gf_force = np.array(gf_ds["/"+source_region+"/force/g"]).flatten()
+
+    # design a window
+    win = tukey(2100,0.2)
+    
+    # make storage matrix
+    stf_moment_matrix = np.zeros((len(waveforms),2100))
+    stf_force_matrix = np.zeros((len(waveforms),2100))
+        
+    # deconvolve moment green's function from each waveform
+    for i in range(len(waveforms)):
+        z = cumtrapz(waveforms[i],dx=dt)
+        z = win*z
+        stf_moment = deconvolve(gf_moment,z)
+        stf_moment_aligned = align(np.real(master_stf_moment-master_stf_moment[0]),np.real(stf_moment-stf_moment[0]),2100)
+        stf_moment_matrix[i,:] = stf_moment_aligned
+        stf_force = deconvolve(gf_force,z)
+        stf_force_aligned = align(np.real(master_stf_force-master_stf_force[0]),np.real(stf_force-stf_force[0]),2100)
+        stf_force_matrix[i,:] = stf_force_aligned
+    # get stacked stf
+    stf_moment_stack = np.nanmean(stf_moment_matrix,axis=0)
+    stf_force_stack = np.nanmean(stf_force_matrix,axis=0)
+
+    # plot moment gf
+    ax[0][0].plot(t,gf_moment,color='k',linewidth=3)
+    ax[0][0].set_title("     a. Moment Green's function",fontsize=30)
+    ax[0][0].set_ylabel("Moment$^{-1}$seconds$^{-1}$" "\n" "$(\dfrac{N*m}{m^2}*s)^{-1}$ ",fontsize=20)
+    #ax[0][0].set_xlim((0,1000))
+    ax[0][0].tick_params(axis='x',labelsize=20)
+    ax[0][0].tick_params(axis='y',labelsize=20)
+    ax[0][0].yaxis.offsetText.set_fontsize(20)
+
+    # plot moment stf
+    for i in range(len(stf_moment_matrix)):
+        ax[0][1].plot(t[0:window[1]-window[0]],stf_moment_matrix[i,window[0]:window[1]],'k',alpha=0.01)
+    ax[0][1].plot(t[0:window[1]-window[0]],stf_moment_stack[window[0]:window[1]],color=color,linewidth=3)
+    ax[0][1].set_title("     b. Moment source time function",fontsize=30)
+    ax[0][1].set_ylabel("Moment $(\dfrac{N*m}{m^2})$",fontsize=20)
+    ax[0][1].set_ylim((min(stf_moment_stack),max(stf_moment_stack)))
+    #ax[0][1].set_xlim((0,50))
+    ax[0][1].tick_params(axis='x',labelsize=20)
+    ax[0][1].tick_params(axis='y',labelsize=20)
+    ax[0][1].yaxis.offsetText.set_fontsize(20)
+
+    # plot force gf
+    ax[1][0].plot(t,gf_force*1000,color='k',linewidth=3)
+    ax[1][0].set_title("  c. Pressure Green's function",fontsize=30)
+    ax[1][0].set_ylabel("Pressure$^{-1}$seconds$^{-1}$" "\n" "$(kPa*s)^{-1}$",fontsize=20)
+    ax[1][0].set_xlabel("Time (s)",fontsize=20)
+    #ax[2][0].set_xlim((0,1000))
+    ax[1][0].tick_params(axis='x',labelsize=20)
+    ax[1][0].tick_params(axis='y',labelsize=20)
+    ax[1][0].yaxis.offsetText.set_fontsize(20)
+
+    # plot force stf
+    for i in range(len(stf_force_matrix)):
+        ax[1][1].plot(t[0:window[1]-window[0]],stf_force_matrix[i,window[0]:window[1]],'k',alpha=0.01)
+    ax[1][1].plot(t[0:window[1]-window[0]],stf_force_stack[window[0]:window[1]]/1000,color=color,linewidth=3)
+    ax[1][1].set_title("d. Pressure source time function",fontsize=30)
+    ax[1][1].set_ylabel("Pressure (kPa)",fontsize=20)
+    ax[1][1].set_xlabel("Time (s)",fontsize=20)
+    ax[1][1].set_ylim((min(stf_force_stack)/1000,max(stf_force_stack)/1000))
+    #ax[2][1].set_xlim((0,50))
+    ax[1][1].tick_params(axis='x',labelsize=20)
+    ax[1][1].tick_params(axis='y',labelsize=20)
+    
+    plt.tight_layout()
+    plt.savefig("outputs/figures/deconvolution_stack_"+source_region+".png",dpi=60)
